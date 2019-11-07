@@ -24,8 +24,9 @@ from Basilisk.fswAlgorithms import attTrackingError
 from Basilisk.fswAlgorithms import MRP_Feedback, rwMotorTorque
 from Basilisk.fswAlgorithms import fswMessages
 from Basilisk.fswAlgorithms import inertialUKF
-from Basilisk.fswAlgorithms import thrMomentumManagement, thrMomentumDumping, thrForceMapping
+from Basilisk.fswAlgorithms import thrMomentumManagement, thrMomentumDumping, thrForceMapping, thrFiringSchmitt
 
+from basilisk_env.simulators.dynamics.effectorPrimatives import actuatorPrimatives as ap
 
 class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
     '''
@@ -219,34 +220,14 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
-        rwFactory = simIncludeRW.rwFactory()
-        varRWModel = rwFactory.BalancedWheels
-        RW1 = rwFactory.create('Honeywell_HR16'
-                               , [1, 0, 0]
-                               , maxMomentum=50.
-                               , Omega=100.  # RPM
-                               , RWModel=varRWModel
-                               )
-        RW2 = rwFactory.create('Honeywell_HR16'
-                               , [0, 1, 0]
-                               , maxMomentum=50.
-                               , Omega=200.  # RPM
-                               , RWModel=varRWModel
-                               )
-        RW3 = rwFactory.create('Honeywell_HR16'
-                               , [0, 0, 1]
-                               , maxMomentum=50.
-                               , Omega=300.  # RPM
-                               , rWB_B=[0.5, 0.5, 0.5]  # meters
-                               , RWModel=varRWModel
-                               )
-        numRW = rwFactory.getNumOfDevices()
-        self.rwStateEffector = reactionWheelStateEffector.ReactionWheelStateEffector()
+        self.rwStateEffector, rwFactory = ap.balancedHR16Triad()
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
 
         #   Add thrusters to the spacecraft
-
-
+        self.thrusterSet, thrFactory = ap.idealMonarc1Octet()
+        self.thrusterSet.InputCmds = "rwDesatTimeOnCmd"
+        thrModelTag = "ACSThrusterDynamics"
+        thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
 
         #   Add simpleNav as a mock estimator to the spacecraft
         self.simpleNavObject = simple_nav.SimpleNav()
@@ -287,6 +268,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask(self.dynTaskName, self.simpleNavObject)
         self.AddModelToTask(self.dynTaskName, self.extForceTorqueObject)
         self.AddModelToTask(self.dynTaskName, self.rwStateEffector)
+        self.AddModelToTask(self.dynTaskName, self.thrusterSet)
         self.AddModelToTask(self.dynTaskName, self.eclipseObject)
         self.AddModelToTask(self.dynTaskName, self.solarPanel)
         self.AddModelToTask(self.dynTaskName, self.powerMonitor)
@@ -310,7 +292,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.fswProc.addTask(self.CreateNewTask("inertial3DPointTask", self.processTasksTimeStep),10)
         self.fswProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),10)
         self.fswProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), 10)
-        self.fswProc.addTask(self.CreateNewTask("wheelDesatTask", self.processTasksTimeStep), 10)
+        self.fswProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), 10)
 
         #   Specify the vehicle configuration message to tell things what the vehicle inertia is
         vehicleConfigOut = fswMessages.VehicleConfigFswMsg()
@@ -375,10 +357,40 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.thrDesatControlConfig.hs_min = 100. / 6000. * 100.  # Nms
         self.thrDesatControlConfig.rwSpeedsInMsgName = "reactionwheel_speeds"
         self.thrDesatControlConfig.rwConfigDataInMsgName = "rwa_config_data"
-        self.thrDesatControlConfig.deltaHOutMsgName = "outputName"
+        self.thrDesatControlConfig.deltaHOutMsgName = "wheelDeltaH"
 
-        #   InertialEKF configuration [WIP]
+        # setup the thruster force mapping module
+        self.thrForceMappingConfig = thrForceMapping.thrForceMappingConfig()
+        self.thrForceMappingWrap = self.setModelDataWrap(self.thrForceMappingConfig)
+        self.thrForceMappingWrap.ModelTag = "thrForceMapping"
+        self.thrForceMappingConfig.inputVehControlName = "wheelDeltaH"
+        self.thrForceMappingConfig.inputThrusterConfName = "ThrustersConfig"
+        self.thrForceMappingConfig.inputVehicleConfigDataName = self.mrpFeedbackControlData.vehConfigInMsgName
+        self.thrForceMappingConfig.outputDataName = "delta_p_achievable"
 
+        # setup the Schmitt trigger thruster firing logic module
+        """
+        self.thrFiringSchmittConfig = thrFiringSchmitt.thrFiringSchmittConfig()
+        self.thrFiringSchmittWrap = self.setModelDataWrap(self.thrFiringSchmittConfig)
+        self.thrFiringSchmittWrap.ModelTag = "thrFiringSchmitt"
+        self.thrFiringSchmittConfig.thrMinFireTime = 0.002
+        self.thrFiringSchmittConfig.level_on = .75
+        self.thrFiringSchmittConfig.level_off = .25
+        self.thrFiringSchmittConfig.thrConfInMsgName = "ThrustersConfig"
+        self.thrFiringSchmittConfig.thrForceInMsgName = self.thrForceMappingConfig.outputDataName
+        self.thrFiringSchmittConfig.onTimeOutMsgName = "acs_thruster_cmds"
+        controlAxes_B = [1, 0, 0,
+                             0, 1, 0,
+                             0, 0, 1]
+        self.thrForceMappingConfig.thrForceSign = +1
+        self.thrForceMappingConfig.controlAxes_B = controlAxes_B
+        """
+
+        self.thrDumpConfig = thrMomentumDumping.thrMomentumDumpingConfig()
+        self.thrDumpWrap = self.setModelDataWrap(self.thrDesatControlConfig)
+        self.thrDumpConfig.deltaHInMsgName = self.thrDesatControlConfig.deltaHOutMsgName
+        self.thrDumpConfig.thrusterImpulseInMsgName = "delta_p_achievable"
+        self.thrDumpConfig.thrusterOnTimeOutMsgName = self.thrusterSet.InputCmds
 
         #   Add models to tasks
         self.AddModelToTask("inertial3DPointTask", self.inertial3DWrap, self.inertial3DData)
@@ -388,7 +400,8 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask("mrpControlTask", self.rwMotorTorqueWrap, self.rwMotorTorqueConfig)
 
         self.AddModelToTask("rwDesatTask", self.thrDesatControlWrap, self.thrDesatControlConfig)
-
+        self.AddModelToTask("rwDesatTask", self.thrForceMappingWrap, self.thrForceMappingConfig)
+        self.AddModelToTask("rwDesatTask", self.thrDumpWrap, self.thrDumpConfig)
 
 
         #   Hill pointing task; should point nadir.
@@ -469,6 +482,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         '''
 
         self.modeRequest = str(action)
+        if action==2:
+            #   Need to reset the wheel desaturation system or things will break.
+            reset_time = mc.sec2nano(self.simTime)
+            self.thrDesatControlWrap.Reset(reset_time)
+            self.thrDumpWrap.Reset(reset_time)
         self.simTime += self.step_duration
         simulationTime = mc.sec2nano(self.simTime)
 
@@ -509,7 +527,7 @@ if __name__=="__main__":
     sim = LEOPowerAttitudeSimulator(1.0, 1.0, 60.0)
     obs = []
     for ind in range(0,24*60):
-        obs.append(sim.run_sim(1))
+        obs.append(sim.run_sim(2))
 
 
 
