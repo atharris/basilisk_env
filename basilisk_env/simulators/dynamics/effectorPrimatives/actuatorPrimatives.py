@@ -1,5 +1,6 @@
 from Basilisk.simulation import thrusterDynamicEffector, reactionWheelStateEffector
 from Basilisk.utilities import simIncludeThruster, simIncludeRW
+from Basilisk.utilities import fswSetupThrusters, fswSetupRW
 
 def balancedHR16Triad():
     """
