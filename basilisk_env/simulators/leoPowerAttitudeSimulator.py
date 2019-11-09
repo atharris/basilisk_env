@@ -89,6 +89,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.dynTask = self.dynProc.addTask(self.CreateNewTask(self.dynTaskName, mc.sec2nano(self.dynRate)))
         self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.dynRate)))
 
+        self.FSWProcessName = "FSWProcess" #Create simulation process name
+        self.fswProc = self.CreateNewProcess(self.FSWProcessName) #Create processes
+        self.fswTaskName = 'FswTask'
+        self.fswTask = self.fswProc.addTask(self.CreateNewTask(self.fswTaskName, mc.sec2nano(self.fswRate)))
+
         self.obs = np.zeros([5,1])
         self.sim_states = np.zeros([11,1])
 
@@ -98,6 +103,16 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.set_logging()
 
         self.modeRequest = None
+        #   Initialize interfaces for fsw, dynamics
+        self.dyn2FSWInterface = sim_model.SysInterface()
+        self.fsw2DynInterface = sim_model.SysInterface()
+
+        # Discover interfaces between processes
+        self.dyn2FSWInterface.addNewInterface(self.DynamicsProcessName, self.FSWProcessName)
+        self.fsw2DynInterface.addNewInterface(self.FSWProcessName, self.DynamicsProcessName)
+        self.dynProc.addInterfaceRef(self.dyn2FSWInterface)
+        self.fswProc.addInterfaceRef(self.fsw2DynInterface)
+
         self.InitializeSimulationAndDiscover()
 
         return
@@ -205,7 +220,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
-        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.rwConfigMsgName, rwFactory.getConfigMessage(), msgStrName="RWArrayConfigFswMsg")
+        unitTestSupport.setMessage(self.TotalSim, self.FSWProcessName, self.rwConfigMsgName, rwFactory.getConfigMessage(), msgStrName="RWArrayConfigFswMsg")
 
         #   Add thrusters to the spacecraft
         self.thrusterSet, thrFactory = ap.idealMonarc1Octet()
@@ -213,7 +228,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         thrModelTag = "ACSThrusterDynamics"
         thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
         self.thrusterConfigMsgName = "thrusterConfig"
-        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.thrusterConfigMsgName, rwFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
+        unitTestSupport.setMessage(self.TotalSim, self.FSWProcessName, self.thrusterConfigMsgName, rwFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
 
         #   Add simpleNav as a mock estimator to the spacecraft
         self.simpleNavObject = simple_nav.SimpleNav()
@@ -246,11 +261,9 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.sim_states[9,0] = self.powerMonitor.storedCharge_Init
         self.obs[3,0] = self.powerMonitor.storedCharge_Init
 
-
-
         #   Add all the models to the dynamics task
         self.AddModelToTask(self.dynTaskName, self.scObject)
-        self.AddModelToTask(self.dynTaskName, self.gravFactory.spiceObject)
+        self.AddModelToTask(self.spiceTaskName, self.gravFactory.spiceObject)
         self.AddModelToTask(self.dynTaskName, self.densityModel)
         self.AddModelToTask(self.dynTaskName, self.dragEffector)
         self.AddModelToTask(self.dynTaskName, self.simpleNavObject)
@@ -275,12 +288,12 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         :return:
         '''
 
-        self.processName = self.DynamicsProcessName
+        self.processName = self.FSWProcessName
         self.processTasksTimeStep = mc.sec2nano(self.fswRate)  # 0.5
-        self.dynProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),10)
-        self.dynProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),10)
-        self.dynProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), 10)
-        self.dynProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), 10)
+        self.fswProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),10)
+        self.fswProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),10)
+        self.fswProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), 10)
+        self.fswProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), 10)
 
         #   Specify the vehicle configuration message to tell things what the vehicle inertia is
         vehicleConfigOut = fswMessages.VehicleConfigFswMsg()
@@ -292,9 +305,18 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         vehicleConfigOut.ISCPntB_B = I
         unitTestSupport.setMessage(self.TotalSim,
-                                   self.DynamicsProcessName,
+                                   self.FSWProcessName,
                                    "adcs_config_data",
                                    vehicleConfigOut)
+
+        #
+        """
+        self.inertial3DData = inertial3D.inertial3DConfig()
+        self.inertial3DWrap = self.setModelDataWrap(self.inertial3DData)
+        self.inertial3DWrap.ModelTag = "inertial3D"
+        self.inertial3DData.sigma_R0N = [1.0, 0., 0.]
+        self.inertial3DData.outputDataName = "att_reference"
+        """
 
         #   Sun pointing configuration
         self.sunPointData = hillPoint.hillPointConfig()
@@ -399,6 +421,15 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         :return:
         '''
 
+        simModuleId = 1
+
+        msgDict = {}
+
+        self.stateMsgId = simulationArchTypes.SubscribeToMessage(self.scObject.scStateOutMsgName, 
+                                                simMessages.SCPlusStatesSimMsg(),
+                                                simModuleId)
+
+
         ##  Set the sampling time to the duration of a timestep:
         samplingTime = mc.sec2nano(self.step_duration)
 
@@ -442,32 +473,33 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         if self.modeRequest == "0":
             print('starting nadir pointing...')
             #   Set up a nadir pointing mode
+            self.fswProc.disableAllTasks()
             self.dynProc.enableAllTasks()
+            self.fswProc.selectProcess()
             self.hillPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
-            self.disableTask('sunPointTask')
-            self.disableTask('rwDesatTask')
             self.enableTask('nadirPointTask')
             self.enableTask('mrpControlTask')
         elif self.modeRequest =="1":
             print('starting sun pointing...')
             #   Set up a sun pointing mode
+            self.fswProc.disableAllTasks()
             self.dynProc.enableAllTasks()
+            self.fswProc.selectProcess()
             self.sunPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
-            self.disableTask('nadirPointTask')
-            self.disableTask('rwDesatTask')
             self.enableTask('sunPointTask')
             self.enableTask('mrpControlTask')
         elif self.modeRequest == "2":
             print('starting desat...')
             #   Set up a desat mode
+            self.fswProc.disableAllTasks()
             self.dynProc.enableAllTasks()
+            self.fswProc.selectProcess()
             self.sunPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
             self.thrDesatControlWrap.Reset(currentResetTime)
             self.thrDumpWrap.Reset(currentResetTime)
-            self.disableTask('nadirPointTask')
             self.enableTask('sunPointTask')
             self.enableTask('mrpControlTask')
             self.enableTask('rwDesatTask')
@@ -498,7 +530,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
 
-        sunPosition = simDict['sun_planet_data.PositionVector']
+        sunPosition = simDict['sun_planet_dat.PositionVector']
 
         inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
         inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
@@ -513,7 +545,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
 
 if __name__=="__main__":
-    sim = LEOPowerAttitudeSimulator(0.1, 0.1, 60.0)
+    sim = LEOPowerAttitudeSimulator(0.1, 0.1, 10.0)
     obs = []
     states = []
     normWheelSpeed = []
@@ -521,7 +553,7 @@ if __name__=="__main__":
     from matplotlib import pyplot as plt
     from random import randrange
     plt.figure()
-    tFinal = 1*60
+    tFinal = 12*60
     for ind in range(0,tFinal):
         act = randrange(3)
         actList.append(act)
