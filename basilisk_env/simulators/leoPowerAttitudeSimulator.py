@@ -85,7 +85,9 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.DynamicsProcessName = 'DynamicsProcess' #Create simulation process name
         self.dynProc = self.CreateNewProcess(self.DynamicsProcessName) #Create process
         self.dynTaskName = 'DynTask'
+        self.spiceTaskName = 'SpiceTask'
         self.dynTask = self.dynProc.addTask(self.CreateNewTask(self.dynTaskName, mc.sec2nano(self.dynRate)))
+        self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.dynRate)))
 
         self.FSWProcessName = "FSWProcess" #Create simulation process name
         self.fswProc = self.CreateNewProcess(self.FSWProcessName) #Create processes
@@ -148,21 +150,12 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.gravFactory.spiceObject.zeroBase="earth" # Make sure that the Earth is the zero base
 
+        self.gravFactory.createSun()
         planet = self.gravFactory.createEarth()
         planet.isCentralBody = True  # ensure this is the central gravitational body
         mu = planet.mu
         # attach gravity model to spaceCraftPlus
         self.scObject.gravField.gravBodies = spacecraftPlus.GravBodyVector(list(self.gravFactory.gravBodies.values()))
-
-        #   Stick the sun 1AU away
-        self.sunMessage = simMessages.SpicePlanetStateSimMsg()
-        self.sunMessage.PositionVector = [orbitalMotion.AU, 0,0]
-        self.sunMessage.VelocityVector = [0,0,0]
-
-        unitTestSupport.setMessage(self.TotalSim,
-                                   self.DynamicsProcessName,
-                                   "sun_planet_data",
-                                   self.sunMessage)
 
         #   setup orbit using orbitalMotion library
         oe = orbitalMotion.ClassicElements()
@@ -208,7 +201,10 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.dragEffector.addFacet(0.1*0.2, 2.2, [0,-1,0], [0, -0.15, 0])
         self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,1], [0,0, 0.1])
         self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,-1], [0, 0, -0.1])
+        self.dragEffector.addFacet(1.*3., 2.2, [1,0,0],[2.0,0,0])
+        self.dragEffector.addFacet(1.*3., 2.2, [-1,0,0],[2.0,0,0])
         self.dragEffector.atmoDensInMsgName = self.densityModel.envOutMsgNames[-1]
+        self.scObject.addDynamicEffector(self.dragEffector)
 
         self.eclipseObject = eclipse.Eclipse()
         self.eclipseObject.addPositionMsgName(self.scObject.scStateOutMsgName)
@@ -220,7 +216,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
-        self.rwStateEffector, rwFactory = ap.balancedHR16Triad()
+        self.rwStateEffector, rwFactory = ap.balancedHR16Triad(useRandom=True)
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
@@ -245,7 +241,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.solarPanel.stateInMsgName = self.scObject.scStateOutMsgName
         self.solarPanel.sunEclipseInMsgName = 'eclipse_data_'+str(sc_number)
         self.solarPanel.sunInMsgName = 'sun_planet_data'
-        self.solarPanel.setPanelParameters(unitTestSupport.np2EigenVectorXd(np.array([1,0,0])), 0.2*0.3, 0.20)
+        self.solarPanel.setPanelParameters(unitTestSupport.np2EigenVectorXd(np.array([-1,0,0])), 0.2*0.3, 0.20)
         self.solarPanel.nodePowerOutMsgName = "panelPowerMsg" + str(sc_number)
 
         self.powerSink = simplePowerSink.SimplePowerSink()
@@ -267,7 +263,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Add all the models to the dynamics task
         self.AddModelToTask(self.dynTaskName, self.scObject)
-        #self.AddModelToTask(self.dynTaskName, self.gravFactory.spiceObject)
+        self.AddModelToTask(self.spiceTaskName, self.gravFactory.spiceObject)
         self.AddModelToTask(self.dynTaskName, self.densityModel)
         self.AddModelToTask(self.dynTaskName, self.dragEffector)
         self.AddModelToTask(self.dynTaskName, self.simpleNavObject)
@@ -294,7 +290,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.processName = self.FSWProcessName
         self.processTasksTimeStep = mc.sec2nano(self.fswRate)  # 0.5
-        self.fswProc.addTask(self.CreateNewTask("inertial3DPointTask", self.processTasksTimeStep),10)
+        self.fswProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),10)
         self.fswProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),10)
         self.fswProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), 10)
         self.fswProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), 10)
@@ -314,19 +310,32 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
                                    vehicleConfigOut)
 
         #
+        """
         self.inertial3DData = inertial3D.inertial3DConfig()
         self.inertial3DWrap = self.setModelDataWrap(self.inertial3DData)
         self.inertial3DWrap.ModelTag = "inertial3D"
         self.inertial3DData.sigma_R0N = [1.0, 0., 0.]
         self.inertial3DData.outputDataName = "att_reference"
+        """
 
-        #   Hill point attitude guidance configuration
+        #   Sun pointing configuration
+        self.sunPointData = hillPoint.hillPointConfig()
+        self.sunPointWrap = self.setModelDataWrap(self.sunPointData)
+        self.sunPointWrap.ModelTag = "sunPoint"
+        self.sunPointData.outputDataName = "att_reference"
+        self.sunPointData.inputNavDataName = self.simpleNavObject.outputTransName
+        self.sunPointData.inputCelMessName = self.gravFactory.gravBodies['sun'].bodyInMsgName
+
+        #   Earth pointing configuration
         self.hillPointData = hillPoint.hillPointConfig()
         self.hillPointWrap = self.setModelDataWrap(self.hillPointData)
         self.hillPointWrap.ModelTag = "hillPoint"
         self.hillPointData.outputDataName = "att_reference"
         self.hillPointData.inputNavDataName = self.simpleNavObject.outputTransName
-        self.hillPointData.inputCelMessName = self.gravFactory.gravBodies['earth'].bodyInMsgName[:-1]
+        self.hillPointData.inputCelMessName = self.gravFactory.gravBodies['earth'].bodyInMsgName
+
+        print('Nadir pointing celestial body: ' + self.hillPointData.inputCelMessName)
+        print('Sun pointing cel body: '+ self.sunPointData.inputCelMessName)
 
         #   Attitude error configuration
         self.trackingErrorData = attTrackingError.attTrackingErrorConfig()
@@ -365,7 +374,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.thrDesatControlConfig = thrMomentumManagement.thrMomentumManagementConfig()
         self.thrDesatControlWrap = self.setModelDataWrap(self.thrDesatControlConfig)
         self.thrDesatControlWrap.ModelTag = "thrMomentumManagement"
-        self.thrDesatControlConfig.hs_min = 100. / 6000. * 100.  # Nms
+        self.thrDesatControlConfig.hs_min = 10.  # Nms
         self.thrDesatControlConfig.rwSpeedsInMsgName = self.rwStateEffector.OutputDataString
         self.thrDesatControlConfig.rwConfigDataInMsgName = self.rwConfigMsgName
         self.thrDesatControlConfig.deltaHOutMsgName = "wheelDeltaH"
@@ -387,9 +396,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.thrDumpConfig.thrusterImpulseInMsgName = "delta_p_achievable"
         self.thrDumpConfig.thrusterOnTimeOutMsgName = self.thrusterSet.InputCmds
         self.thrDumpConfig.thrusterConfInMsgName = self.thrusterConfigMsgName
+        self.thrDumpConfig.thrDumpingCounter = 5
+        self.thrDumpConfig.thrMinFireTime = 2.0 #   Seconds
 
         #   Add models to tasks
-        self.AddModelToTask("inertial3DPointTask", self.inertial3DWrap, self.inertial3DData)
+        self.AddModelToTask("sunPointTask", self.sunPointWrap, self.sunPointData)
         self.AddModelToTask("nadirPointTask", self.hillPointWrap, self.hillPointData)
         self.AddModelToTask("mrpControlTask", self.mrpFeedbackControlWrap, self.mrpFeedbackControlData)
         self.AddModelToTask("mrpControlTask", self.trackingErrorWrap, self.trackingErrorData)
@@ -399,29 +410,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask("rwDesatTask", self.thrForceMappingWrap, self.thrForceMappingConfig)
         self.AddModelToTask("rwDesatTask", self.thrDumpWrap, self.thrDumpConfig)
 
-
-        #   Hill pointing task; should point nadir.
-        self.createNewEvent("0", mc.sec2nano(self.fswRate), True,
-                               ["self.modeRequest == 'hillPoint'"],
-                               ["self.fswProc.disableAllTasks()",
-                                "self.dynProc.enableAllTasks()",
-                                "self.enableTask('hillPointTask')",
-                                "self.enableTask('mrpControlTask')"])
-        #   Sun pointing task; should point towards the inertial `1` axis.
-        self.createNewEvent("1", mc.sec2nano(self.fswRate), True,
-                               ["self.modeRequest == 'sunSafePoint'"],
-                               ["self.fswProc.disableAllTasks()",
-                                "self.dynProc.enableAllTasks()",
-                                "self.enableTask('inertial3DPointTask')",
-                                "self.enableTask('mrpControlTask')"])
-        #   Reaction wheel desat task; points towards the "1" axis while pulsing thrusters to reduce wheel biases.
-        self.createNewEvent("2", mc.sec2nano(self.fswRate), True,
-                               ["self.modeRequest == 'desatPoint'"],
-                               ["self.fswProc.disableAllTasks()",
-                                "self.dynProc.enableAllTasks()",
-                                "self.enableTask('inertial3DPointTask')",
-                                "self.enableTask('mrpControlTask')",
-                                "self.enableTask('rwDesatTask')"])
 
     def set_logging(self):
         '''
@@ -441,8 +429,14 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
                                                 simMessages.SCPlusStatesSimMsg(),
                                                 simModuleId)
 
+
         ##  Set the sampling time to the duration of a timestep:
         samplingTime = mc.sec2nano(self.step_duration)
+
+        #   Log planet, sun positions
+
+        self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
+        self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
         #   Log inertial attitude, position
         self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
         self.TotalSim.logThisMessage(self.simpleNavObject.outputTransName,
@@ -474,11 +468,42 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         '''
 
         self.modeRequest = str(action)
-        if action==2:
-            #   Need to reset the wheel desaturation system or things will break.
-            reset_time = mc.sec2nano(self.simTime)
-            #self.thrDesatControlConfig.thrDumpingCounter = 0
-            #self.thrDumpWrap.Reset(reset_time)
+
+        currentResetTime = mc.sec2nano(self.simTime)
+        if self.modeRequest == "0":
+            print('starting nadir pointing...')
+            #   Set up a nadir pointing mode
+            self.fswProc.disableAllTasks()
+            self.dynProc.enableAllTasks()
+            self.fswProc.selectProcess()
+            self.hillPointWrap.Reset(currentResetTime)
+            self.trackingErrorWrap.Reset(currentResetTime)
+            self.enableTask('nadirPointTask')
+            self.enableTask('mrpControlTask')
+        elif self.modeRequest =="1":
+            print('starting sun pointing...')
+            #   Set up a sun pointing mode
+            self.fswProc.disableAllTasks()
+            self.dynProc.enableAllTasks()
+            self.fswProc.selectProcess()
+            self.sunPointWrap.Reset(currentResetTime)
+            self.trackingErrorWrap.Reset(currentResetTime)
+            self.enableTask('sunPointTask')
+            self.enableTask('mrpControlTask')
+        elif self.modeRequest == "2":
+            print('starting desat...')
+            #   Set up a desat mode
+            self.fswProc.disableAllTasks()
+            self.dynProc.enableAllTasks()
+            self.fswProc.selectProcess()
+            self.sunPointWrap.Reset(currentResetTime)
+            self.trackingErrorWrap.Reset(currentResetTime)
+            self.thrDesatControlWrap.Reset(currentResetTime)
+            self.thrDumpWrap.Reset(currentResetTime)
+            self.enableTask('sunPointTask')
+            self.enableTask('mrpControlTask')
+            self.enableTask('rwDesatTask')
+
         self.simTime += self.step_duration
         simulationTime = mc.sec2nano(self.simTime)
 
@@ -488,45 +513,75 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Pull logged message data and return it as an observation
         simDict = self.pullMultiMessageLogData([
+            'sun_planet_data.PositionVector',
             self.scObject.scStateOutMsgName + '.sigma_BN',
             self.scObject.scStateOutMsgName + '.r_BN_N',
             self.scObject.scStateOutMsgName + '.v_BN_N',
+            "att_reference.sigma_RN",
             self.trackingErrorData.outputDataName + '.sigma_BR',
             self.rwStateEffector.OutputDataString + '.wheelSpeeds',
             self.powerMonitor.batPowerOutMsgName + '.storageLevel',
             self.solarPanel.sunEclipseInMsgName + '.shadowFactor'
-        ], [list(range(3)),list(range(3)),list(range(3)), list(range(3)), list(range(3)),list(range(1)), list(range(1))],1)
+        ], [list(range(3)),list(range(3)),list(range(3)),list(range(3)), list(range(3)), list(range(3)),list(range(3)),list(range(1)), list(range(1))],1)
 
         attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
+        attRef = simDict["att_reference.sigma_RN"]
         storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
         eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
+
+        sunPosition = simDict['sun_planet_dat.PositionVector']
 
         inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
         inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
         inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
 
-        debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4]])
+        debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
         obs = np.hstack([attErr[-1,1:4], wheelSpeeds[-1,1:4], storedCharge[-1,1]/3600., eclipseIndicator[-1,1]])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = debug.reshape(len(debug), 1)
 
-        return obs#, self.sim_states
+        return obs, self.sim_states
 
 
 if __name__=="__main__":
-    sim = LEOPowerAttitudeSimulator(1.0, 1.0, 60.0)
+    sim = LEOPowerAttitudeSimulator(0.1, 0.1, 10.0)
     obs = []
+    states = []
+    normWheelSpeed = []
+    actList = []
     from matplotlib import pyplot as plt
+    from random import randrange
     plt.figure()
-    for ind in range(0,1*60):
-        obs.append(sim.run_sim(2))
+    tFinal = 12*60
+    for ind in range(0,tFinal):
+        act = randrange(3)
+        actList.append(act)
+        ob, state = sim.run_sim(act)
+        normWheelSpeed.append(np.linalg.norm(ob[3:6]))
+        obs.append(ob)
+        states.append(state)
     obs = np.asarray(obs)
-    plt.plot(range(0,1*60),obs[:,0], range(0,1*60),obs[:,1],range(0,1*60),obs[:,2], label='sigma_BR')
-    plt.plot(range(0,1*60), obs[:,3],range(0,1*60),obs[:,4],range(0,1*60),obs[:,5],label="omega_rw")
-    plt.plot(range(0,1*60), obs[:,6],label="stored charge")
-    plt.plot(range(0,1*60),obs[:,7],label="Eclipse")
+    states = np.asarray(states)
+
+
+    plt.plot(range(0,tFinal),obs[:,0], range(0,tFinal),obs[:,1],range(0,tFinal),obs[:,2], label='sigma_BR')
+    #plt.plot(range(0,tFinal), obs[:,3],range(0,tFinal),obs[:,4],range(0,tFinal),obs[:,5],label="omega_rw")
+    plt.plot(range(0,tFinal),normWheelSpeed,label="omega_rw")
+    plt.plot(range(0,tFinal), obs[:,6],label="stored charge")
+    plt.plot(range(0,tFinal),obs[:,7],label="Eclipse")
     plt.legend()
+
+    plt.figure()
+    plt.plot(range(0,tFinal), states[:,0],range(0,tFinal), states[:,1],range(0,tFinal), states[:,2],label='sigma_BN')
+    plt.plot(range(0,tFinal), states[:,9],range(0,tFinal), states[:,10],range(0,tFinal), states[:,11],label='sigma_RN')
+    plt.legend()
+
+    plt.figure()
+    plt.plot(states[:, 3]/1000., states[:, 4]/1000., label="Orbit")
+    plt.plot(states[:,12]/1000., states[:,13]/1000, label="Sun Position")
+    plt.legend()
+
     plt.show()
 
 
