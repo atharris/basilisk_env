@@ -87,7 +87,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.dynTaskName = 'DynTask'
         self.spiceTaskName = 'SpiceTask'
         self.dynTask = self.dynProc.addTask(self.CreateNewTask(self.dynTaskName, mc.sec2nano(self.dynRate)))
-        self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.dynRate)))
+        self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.dynRate/10)))
 
         self.obs = np.zeros([5,1])
         self.sim_states = np.zeros([11,1])
@@ -145,8 +145,8 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         #   setup orbit using orbitalMotion library
         oe = orbitalMotion.ClassicElements()
         oe.a = 6371 * 1000.0 + 300. * 1000
-        oe.e = 0.0
-        oe.i = 0.0 * mc.D2R
+        oe.e = 0.1
+        oe.i = 45.0 * mc.D2R
 
         oe.Omega = 0.0 * mc.D2R
         oe.omega = 0.0 * mc.D2R
@@ -251,6 +251,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         #   Add all the models to the dynamics task
         self.AddModelToTask(self.dynTaskName, self.scObject)
         self.AddModelToTask(self.dynTaskName, self.gravFactory.spiceObject)
+        self.AddModelToTask(self.spiceTaskName, self.gravFactory.spiceObject)
         self.AddModelToTask(self.dynTaskName, self.densityModel)
         self.AddModelToTask(self.dynTaskName, self.dragEffector)
         self.AddModelToTask(self.dynTaskName, self.simpleNavObject)
@@ -295,6 +296,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
                                    self.DynamicsProcessName,
                                    "adcs_config_data",
                                    vehicleConfigOut)
+
 
         #   Sun pointing configuration
         self.sunPointData = hillPoint.hillPointConfig()
@@ -445,20 +447,26 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.dynProc.enableAllTasks()
             self.hillPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
+
             self.disableTask('sunPointTask')
             self.disableTask('rwDesatTask')
+
             self.enableTask('nadirPointTask')
             self.enableTask('mrpControlTask')
-        elif self.modeRequest =="1":
+
+        elif self.modeRequest == "1":
             print('starting sun pointing...')
             #   Set up a sun pointing mode
             self.dynProc.enableAllTasks()
             self.sunPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
+
             self.disableTask('nadirPointTask')
             self.disableTask('rwDesatTask')
+
             self.enableTask('sunPointTask')
             self.enableTask('mrpControlTask')
+
         elif self.modeRequest == "2":
             print('starting desat...')
             #   Set up a desat mode
@@ -467,7 +475,9 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.trackingErrorWrap.Reset(currentResetTime)
             self.thrDesatControlWrap.Reset(currentResetTime)
             self.thrDumpWrap.Reset(currentResetTime)
+
             self.disableTask('nadirPointTask')
+
             self.enableTask('sunPointTask')
             self.enableTask('mrpControlTask')
             self.enableTask('rwDesatTask')
@@ -499,7 +509,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
 
         sunPosition = simDict['sun_planet_data.PositionVector']
-
         inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
         inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
         inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
@@ -521,11 +530,11 @@ if __name__=="__main__":
     from matplotlib import pyplot as plt
     from random import randrange
     plt.figure()
-    tFinal = 1*60
+    tFinal = 1*90
     for ind in range(0,tFinal):
         act = randrange(3)
         actList.append(act)
-        ob, state = sim.run_sim(act)
+        ob, state = sim.run_sim(0)
         normWheelSpeed.append(np.linalg.norm(ob[3:6]))
         obs.append(ob)
         states.append(state)
