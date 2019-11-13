@@ -41,7 +41,7 @@ class leoPowerAttEnv(gym.Env):
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(8,1))
 
-        self.obs = np.zeros([8,])
+        self.obs = np.zeros([11,])
 
         ##  Action Space description
         #   0 - earth pointing (mission objective)
@@ -57,7 +57,6 @@ class leoPowerAttEnv(gym.Env):
 
     def _seed(self):
         np.random.seed()
-        self.simulator.powerMonitor.storedCharge_Init = np.clip(10*np.random.rand(1), 1.0, 10.0)[0]
         return
 
     def _step(self, action):

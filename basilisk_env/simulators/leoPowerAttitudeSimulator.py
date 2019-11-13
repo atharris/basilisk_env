@@ -27,6 +27,7 @@ from Basilisk.fswAlgorithms import inertialUKF
 from Basilisk.fswAlgorithms import thrMomentumManagement, thrMomentumDumping, thrForceMapping, thrFiringSchmitt
 
 from basilisk_env.simulators.dynamics.effectorPrimatives import actuatorPrimatives as ap
+from basilisk_env.simulators.initial_conditions import leo_orbit, sc_attitudes
 
 class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
     '''
@@ -142,16 +143,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         # attach gravity model to spaceCraftPlus
         self.scObject.gravField.gravBodies = spacecraftPlus.GravBodyVector(list(self.gravFactory.gravBodies.values()))
 
-        #   setup orbit using orbitalMotion library
-        oe = orbitalMotion.ClassicElements()
-        oe.a = 6371 * 1000.0 + 300. * 1000
-        oe.e = 0.1
-        oe.i = 45.0 * mc.D2R
-
-        oe.Omega = 0.0 * mc.D2R
-        oe.omega = 0.0 * mc.D2R
-        oe.f = 0.0 * mc.D2R
-        rN, vN = orbitalMotion.elem2rv(mu, oe)
+        oe, rN,vN = leo_orbit.sampled_400km() # Pick a random orbit in LEO with an SMA of 400km
 
         n = np.sqrt(mu / oe.a / oe.a / oe.a)
         P = 2. * np.pi / n
@@ -166,8 +158,10 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.hub.r_CN_NInit = unitTestSupport.np2EigenVectorXd(rN)
         self.scObject.hub.v_CN_NInit = unitTestSupport.np2EigenVectorXd(vN)
 
-        self.scObject.hub.sigma_BNInit = [[0.1], [0.1], [-0.1]]  # sigma_BN_B
-        self.scObject.hub.omega_BN_BInit = [[0.0], [-0.0], [0.0]]
+        sigma_init, omega_init = sc_attitudes.random_tumble(maxSpinRate = 0.001)
+
+        self.scObject.hub.sigma_BNInit = sigma_init  # sigma_BN_B
+        self.scObject.hub.omega_BN_BInit = omega_init
 
         self.sim_states[0:3,0] = np.asarray(self.scObject.hub.sigma_BNInit).flatten()
         self.sim_states[3:6,0] = np.asarray(self.scObject.hub.r_CN_NInit).flatten()
@@ -175,7 +169,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.densityModel = exponentialAtmosphere.ExponentialAtmosphere()
         self.densityModel.addSpacecraftToModel(self.scObject.scStateOutMsgName)
-        self.densityModel.baseDensity = 1.220#  kg/m^3
+        self.densityModel.baseDensity = np.random.uniform(0.8,2.0,1)[0]#  kg/m^3
         self.densityModel.scaleHeight = 8e3 #   m
 
         self.dragEffector = facetDragDynamicEffector.FacetDragDynamicEffector()
@@ -201,7 +195,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
-        self.rwStateEffector, rwFactory = ap.balancedHR16Triad(useRandom=False)
+        self.rwStateEffector, rwFactory = ap.balancedHR16Triad(useRandom=True)
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
@@ -239,7 +233,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.powerMonitor.ModelTag = "powerMonitor"
         self.powerMonitor.batPowerOutMsgName = "powerMonitorMsg"
         self.powerMonitor.storageCapacity = 10.0 * 3600.
-        self.powerMonitor.storedCharge_Init = 10.0 * 3600.
+        self.powerMonitor.storedCharge_Init = np.random.uniform(0.1*3600, 10.3600, 1)[0]
         self.powerMonitor.addPowerNodeToModel(self.solarPanel.nodePowerOutMsgName)
         self.powerMonitor.addPowerNodeToModel(self.powerSink.nodePowerOutMsgName)
 
@@ -405,7 +399,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Log planet, sun positions
 
-        self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
+        #self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
         self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
         #   Log inertial attitude, position
         self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
@@ -428,7 +422,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.TotalSim.logThisMessage(self.solarPanel.sunEclipseInMsgName, samplingTime)
 
         #   Desat debug parameters
-        self.TotalSim.logThisMessage(self.thrDesatControlConfig.deltaHOutMsgName, samplingTime)
+        #self.TotalSim.logThisMessage(self.thrDesatControlConfig.deltaHOutMsgName, samplingTime)
 
         return
 
@@ -444,7 +438,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         currentResetTime = mc.sec2nano(self.simTime)
         if self.modeRequest == "0":
-            print('starting nadir pointing...')
+            #print('starting nadir pointing...')
             #   Set up a nadir pointing mode
             self.dynProc.enableAllTasks()
             self.hillPointWrap.Reset(currentResetTime)
@@ -457,7 +451,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.enableTask('mrpControlTask')
 
         elif self.modeRequest == "1":
-            print('starting sun pointing...')
+            #print('starting sun pointing...')
             #   Set up a sun pointing mode
             self.dynProc.enableAllTasks()
             self.sunPointWrap.Reset(currentResetTime)
@@ -470,7 +464,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.enableTask('mrpControlTask')
 
         elif self.modeRequest == "2":
-            print('starting desat...')
+            #print('starting desat...')
             #   Set up a desat mode
             self.dynProc.enableAllTasks()
             self.sunPointWrap.Reset(currentResetTime)
@@ -497,15 +491,17 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.scObject.scStateOutMsgName + '.r_BN_N',
             self.scObject.scStateOutMsgName + '.v_BN_N',
             "att_reference.sigma_RN",
+            self.simpleNavObject.outputAttName + '.omega_BN_B',
             self.trackingErrorData.outputDataName + '.sigma_BR',
             self.rwStateEffector.OutputDataString + '.wheelSpeeds',
             self.powerMonitor.batPowerOutMsgName + '.storageLevel',
             self.solarPanel.sunEclipseInMsgName + '.shadowFactor'
-        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)),
+        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)),
             list(range(1)), list(range(1)),], 1)
 
         attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
         attRef = simDict["att_reference.sigma_RN"]
+        attRate = simDict[self.simpleNavObject.outputAttName + '.omega_BN_B']
         storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
         eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
@@ -516,7 +512,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
 
         debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
-        obs = np.hstack([attErr[-1,1:4], wheelSpeeds[-1,1:4], storedCharge[-1,1]/3600., eclipseIndicator[-1,1]])
+        obs = np.hstack([attErr[-1,1:4], attRate[-1,1:4], wheelSpeeds[-1,1:4], storedCharge[-1,1]/3600., eclipseIndicator[-1,1]])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = debug.reshape(len(debug), 1)
 
