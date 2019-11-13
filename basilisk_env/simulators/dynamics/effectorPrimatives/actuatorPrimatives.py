@@ -36,19 +36,20 @@ def balancedHR16Triad(useRandom = False, randomBounds = (-600, 600)):
         RW1 = rwFactory.create('Honeywell_HR16'
                                , [1, 0, 0]
                                , maxMomentum=50.
-                               , Omega=100.  # RPM
+                               , Omega=500.  # RPM
                                , RWModel=varRWModel
                                )
         RW2 = rwFactory.create('Honeywell_HR16'
                                , [0, 1, 0]
                                , maxMomentum=50.
-                               , Omega=200.  # RPM
+                               , Omega=500.  # RPM
+
                                , RWModel=varRWModel
                                )
         RW3 = rwFactory.create('Honeywell_HR16'
                                , [0, 0, 1]
                                , maxMomentum=50.
-                               , Omega=300.  # RPM
+                               , Omega=500.  # RPM
                                , rWB_B=[0.5, 0.5, 0.5]  # meters
                                , RWModel=varRWModel
                                )
@@ -154,6 +155,4 @@ def idealMonarc1Octet():
     thFactory = simIncludeThruster.thrusterFactory()
     for pos_B, dir_B in zip(location, direction):
         thFactory.create('MOOG_Monarc_1', pos_B, dir_B)
-
-    thrModelTag = "ACSThrusterDynamics"
     return thrusterSet, thFactory

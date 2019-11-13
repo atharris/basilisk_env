@@ -87,7 +87,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.dynTaskName = 'DynTask'
         self.spiceTaskName = 'SpiceTask'
         self.dynTask = self.dynProc.addTask(self.CreateNewTask(self.dynTaskName, mc.sec2nano(self.dynRate)))
-        self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.dynRate/10)))
+        self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.step_duration)))
 
         self.obs = np.zeros([5,1])
         self.sim_states = np.zeros([11,1])
@@ -156,18 +156,18 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         n = np.sqrt(mu / oe.a / oe.a / oe.a)
         P = 2. * np.pi / n
 
-        I = [900., 0., 0.,
-             0., 800., 0.,
-             0., 0., 600.]
+        I = [90., 0., 0.,
+             0., 80., 0.,
+             0., 0., 60.]
 
-        self.scObject.hub.mHub = 6.0 # kg - spacecraft mass
+        self.scObject.hub.mHub = 100.0 # kg - spacecraft mass
         self.scObject.hub.IHubPntBc_B = unitTestSupport.np2EigenMatrix3d(I)
 
         self.scObject.hub.r_CN_NInit = unitTestSupport.np2EigenVectorXd(rN)
         self.scObject.hub.v_CN_NInit = unitTestSupport.np2EigenVectorXd(vN)
 
         self.scObject.hub.sigma_BNInit = [[0.1], [0.1], [-0.1]]  # sigma_BN_B
-        self.scObject.hub.omega_BN_BInit = [[0.001], [-0.01], [0.01]]
+        self.scObject.hub.omega_BN_BInit = [[0.0], [-0.0], [0.0]]
 
         self.sim_states[0:3,0] = np.asarray(self.scObject.hub.sigma_BNInit).flatten()
         self.sim_states[3:6,0] = np.asarray(self.scObject.hub.r_CN_NInit).flatten()
@@ -201,7 +201,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
-        self.rwStateEffector, rwFactory = ap.balancedHR16Triad(useRandom=True)
+        self.rwStateEffector, rwFactory = ap.balancedHR16Triad(useRandom=False)
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
@@ -211,9 +211,9 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.thrusterSet, thrFactory = ap.idealMonarc1Octet()
         self.thrusterSet.InputCmds = "rwDesatTimeOnCmd"
         thrModelTag = "ACSThrusterDynamics"
-        thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
         self.thrusterConfigMsgName = "thrusterConfig"
-        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.thrusterConfigMsgName, rwFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
+        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.thrusterConfigMsgName, thrFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
+        thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
 
         #   Add simpleNav as a mock estimator to the spacecraft
         self.simpleNavObject = simple_nav.SimpleNav()
@@ -278,10 +278,10 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.processName = self.DynamicsProcessName
         self.processTasksTimeStep = mc.sec2nano(self.fswRate)  # 0.5
-        self.dynProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),10)
-        self.dynProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),10)
-        self.dynProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), 10)
-        self.dynProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), 10)
+        self.dynProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),)
+        self.dynProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),)
+        self.dynProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), )
+        self.dynProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), )
 
         #   Specify the vehicle configuration message to tell things what the vehicle inertia is
         vehicleConfigOut = fswMessages.VehicleConfigFswMsg()
@@ -354,7 +354,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.thrDesatControlConfig = thrMomentumManagement.thrMomentumManagementConfig()
         self.thrDesatControlWrap = self.setModelDataWrap(self.thrDesatControlConfig)
         self.thrDesatControlWrap.ModelTag = "thrMomentumManagement"
-        self.thrDesatControlConfig.hs_min = 10.  # Nms
+        self.thrDesatControlConfig.hs_min = 7.  # Nms
         self.thrDesatControlConfig.rwSpeedsInMsgName = self.rwStateEffector.OutputDataString
         self.thrDesatControlConfig.rwConfigDataInMsgName = self.rwConfigMsgName
         self.thrDesatControlConfig.deltaHOutMsgName = "wheelDeltaH"
@@ -368,16 +368,16 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.thrForceMappingConfig.inputVehicleConfigDataName = self.mrpFeedbackControlData.vehConfigInMsgName
         self.thrForceMappingConfig.outputDataName = "delta_p_achievable"
         self.thrForceMappingConfig.controlAxes_B = controlAxes_B
-        self.thrForceMappingConfig.thrForceSign = 1
+        self.thrForceMappingConfig.thrForceSign = -1
 
         self.thrDumpConfig = thrMomentumDumping.thrMomentumDumpingConfig()
-        self.thrDumpWrap = self.setModelDataWrap(self.thrDesatControlConfig)
+        self.thrDumpWrap = self.setModelDataWrap(self.thrDumpConfig)
         self.thrDumpConfig.deltaHInMsgName = self.thrDesatControlConfig.deltaHOutMsgName
         self.thrDumpConfig.thrusterImpulseInMsgName = "delta_p_achievable"
         self.thrDumpConfig.thrusterOnTimeOutMsgName = self.thrusterSet.InputCmds
         self.thrDumpConfig.thrusterConfInMsgName = self.thrusterConfigMsgName
-        self.thrDumpConfig.thrDumpingCounter = 5
-        self.thrDumpConfig.thrMinFireTime = 2.0 #   Seconds
+        self.thrDumpConfig.maxCounterValue = 2
+        self.thrDumpConfig.thrMinFireTime = 0.002 #   Seconds
 
         #   Add models to tasks
         self.AddModelToTask("sunPointTask", self.sunPointWrap, self.sunPointData)
@@ -385,7 +385,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask("mrpControlTask", self.mrpFeedbackControlWrap, self.mrpFeedbackControlData)
         self.AddModelToTask("mrpControlTask", self.trackingErrorWrap, self.trackingErrorData)
         self.AddModelToTask("mrpControlTask", self.rwMotorTorqueWrap, self.rwMotorTorqueConfig)
-
         self.AddModelToTask("rwDesatTask", self.thrDesatControlWrap, self.thrDesatControlConfig)
         self.AddModelToTask("rwDesatTask", self.thrForceMappingWrap, self.thrForceMappingConfig)
         self.AddModelToTask("rwDesatTask", self.thrDumpWrap, self.thrDumpConfig)
@@ -402,7 +401,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         '''
 
         ##  Set the sampling time to the duration of a timestep:
-        samplingTime = mc.sec2nano(self.step_duration)
+        samplingTime = mc.sec2nano(self.dynRate)
 
         #   Log planet, sun positions
 
@@ -427,6 +426,9 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Eclipse indicator
         self.TotalSim.logThisMessage(self.solarPanel.sunEclipseInMsgName, samplingTime)
+
+        #   Desat debug parameters
+        self.TotalSim.logThisMessage(self.thrDesatControlConfig.deltaHOutMsgName, samplingTime)
 
         return
 
@@ -461,7 +463,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.sunPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
 
-            self.disableTask('nadirPointTask')
+            self.disableTask('nadirPo1intTask')
             self.disableTask('rwDesatTask')
 
             self.enableTask('sunPointTask')
@@ -472,7 +474,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             #   Set up a desat mode
             self.dynProc.enableAllTasks()
             self.sunPointWrap.Reset(currentResetTime)
-            self.trackingErrorWrap.Reset(currentResetTime)
             self.thrDesatControlWrap.Reset(currentResetTime)
             self.thrDumpWrap.Reset(currentResetTime)
 
@@ -500,7 +501,8 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             self.rwStateEffector.OutputDataString + '.wheelSpeeds',
             self.powerMonitor.batPowerOutMsgName + '.storageLevel',
             self.solarPanel.sunEclipseInMsgName + '.shadowFactor'
-        ], [list(range(3)),list(range(3)),list(range(3)),list(range(3)), list(range(3)), list(range(3)),list(range(3)),list(range(1)), list(range(1))],1)
+        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)),
+            list(range(1)), list(range(1)),], 1)
 
         attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
         attRef = simDict["att_reference.sigma_RN"]
@@ -522,7 +524,10 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
 
 if __name__=="__main__":
-    sim = LEOPowerAttitudeSimulator(0.1, 0.1, 60.0)
+    """
+    Test execution of the simulator with random actions and plot the observation space.
+    """
+    sim = LEOPowerAttitudeSimulator(0.1,0.1, 1*60.)
     obs = []
     states = []
     normWheelSpeed = []
@@ -530,21 +535,21 @@ if __name__=="__main__":
     from matplotlib import pyplot as plt
     from random import randrange
     plt.figure()
-    tFinal = 1*90
+
+    tFinal = 90
     for ind in range(0,tFinal):
         act = randrange(3)
         actList.append(act)
-        ob, state = sim.run_sim(0)
-        normWheelSpeed.append(np.linalg.norm(ob[3:6]))
+        ob, state = sim.run_sim(act)
+        normWheelSpeed.append(np.linalg.norm(abs(ob[3:6])))
         obs.append(ob)
         states.append(state)
     obs = np.asarray(obs)
     states = np.asarray(states)
 
-
     plt.plot(range(0,tFinal),obs[:,0], range(0,tFinal),obs[:,1],range(0,tFinal),obs[:,2], label='sigma_BR')
-    #plt.plot(range(0,tFinal), obs[:,3],range(0,tFinal),obs[:,4],range(0,tFinal),obs[:,5],label="omega_rw")
-    plt.plot(range(0,tFinal),normWheelSpeed,label="omega_rw")
+    plt.plot(range(0,tFinal), obs[:,3]*9.54929659642538,range(0,tFinal),obs[:,4]*9.54929659642538,range(0,tFinal),obs[:,5]*9.54929659642538,label="omega_rw")
+    #plt.plot(range(0,tFinal),normWheelSpeed,label="omega_rw")
     plt.plot(range(0,tFinal), obs[:,6],label="stored charge")
     plt.plot(range(0,tFinal),obs[:,7],label="Eclipse")
     plt.legend()
@@ -560,7 +565,6 @@ if __name__=="__main__":
     plt.legend()
 
     plt.show()
-
 
 
 

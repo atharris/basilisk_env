@@ -39,15 +39,15 @@ class leoPowerAttEnv(gym.Env):
         #   eclipse_ind - 1 x 1 1 in the sun, 0 in eclipse
         low = -1e16
         high = 1e16
-        self.observation_space = spaces.Box(low, high,shape=(5,1))
+        self.observation_space = spaces.Box(low, high,shape=(8,1))
 
-        self.obs = np.zeros([5,])
+        self.obs = np.zeros([8,])
 
         ##  Action Space description
         #   0 - earth pointing (mission objective)
         #   1 - sun pointing (power objective)
 
-        self.action_space = spaces.Discrete(2)
+        self.action_space = spaces.Discrete(3)
 
         # Store what the agent tried
         self.curr_episode = -1
