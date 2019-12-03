@@ -1,95 +1,35 @@
 # 3rd party modules
 import numpy as np
-import socket, errno
 
 #   Basilisk modules
 from Basilisk.utilities import SimulationBaseClass
 from Basilisk.utilities import macros as mc
 from Basilisk.utilities import unitTestSupport
 from Basilisk.utilities import orbitalMotion
+from Basilisk.simulation import sim_model
+
+from Basilisk.simulation import (spacecraftPlus, gravityEffector, extForceTorque, simple_nav, spice_interface,
+                                eclipse, imu_sensor, exponentialAtmosphere, facetDragDynamicEffector, planetEphemeris, reactionWheelStateEffector,
+                                 thrusterDynamicEffector)
+from Basilisk.simulation import simMessages
+from Basilisk.utilities import simIncludeRW, simIncludeGravBody, simIncludeThruster
 from Basilisk.utilities import RigidBodyKinematics as rbk
-from numpy.random import uniform
-import matplotlib as mpl
+from Basilisk.utilities import simulationArchTypes
+from Basilisk.simulation import simpleBattery, simplePowerSink, simpleSolarPanel
 from Basilisk import __path__
 bskPath = __path__[0]
-# Get current file path
-import sys, os, inspect, time, signal, subprocess
-filename = inspect.getframeinfo(inspect.currentframe()).filename
-path = os.path.dirname(os.path.abspath(filename))
-sys.path.append(path + '/opNav_models')
-from BSK_masters import BSKSim, BSKScenario
-import BSK_OpNavDynamics, BSK_OpNavFsw
 
-mpl.rcParams.update({'font.size' : 8 })
-#seaborn-colorblind, 'seaborn-paper', 'bmh', 'tableau-colorblind10', 'seaborn-deep', 'myStyle', 'aiaa'
+from Basilisk.fswAlgorithms import inertial3D, hillPoint, celestialTwoBodyPoint
+from Basilisk.fswAlgorithms import attTrackingError
+from Basilisk.fswAlgorithms import MRP_Feedback, rwMotorTorque
+from Basilisk.fswAlgorithms import fswMessages
+from Basilisk.fswAlgorithms import inertialUKF
+from Basilisk.fswAlgorithms import thrMomentumManagement, thrMomentumDumping, thrForceMapping, thrFiringSchmitt
 
-try:
-    plt.style.use("myStyle")
-except:
-    pass
-params = {'axes.labelsize': 8,'axes.titlesize':8, 'legend.fontsize': 8, 'xtick.labelsize': 7, 'ytick.labelsize': 7, 'text.usetex': True}
-mpl.rcParams.update(params)
+from basilisk_env.simulators.dynamics.effectorPrimatives import actuatorPrimatives as ap
+from basilisk_env.simulators.initial_conditions import leo_orbit, sc_attitudes
 
-def socket_in_use(address, port):
-    """
-    Checks whether a given address+port is in use.
-    """
-
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    try:
-        s.bind((address, port))
-        return False
-    except socket.error as e:
-        if e.errno == errno.EADDRINUSE:
-            print("Port is already in use")
-            return True
-        else:
-            # something else raised the socket.error exception
-            print(e)
-            return True
-
-
-class viz_manager(object):
-    """
-    Manages an instance of the Vizard astrodynamics visualizer.
-    """
-    def __init__(self):
-
-        self.viz_init = False
-        self.fail_count = 0
-        self.fail_limit = 20
-
-    def createViz(self, port=5556):
-        """
-        Creates a Viz instance.
-        """
-        if self.viz_init == False:
-            #   Check if the desired port is open:
-            #if not socket_in_use(os.environ['viz_address'],port) and self.fail_count < self.fail_limit:
-            self.viz_proc = subprocess.Popen([os.environ['viz_app'], "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{port}"], stdout=subprocess.DEVNULL)  # ,, "-batchmode"
-            self.viz_init=True
-            return port
-            # else:
-            #     self.fail_count = self.fail_count + 1
-            #     self.createViz(port=port+1)
-        else: 
-            pass
-
-    
-
-    def stopViz(self):
-        """ 
-        Kills all existing vizard instances.
-        """
-        self.viz_proc.kill() #  Kill the viz process
-        #   If we're on WSL, also invoke kill:
-        proc = subprocess.Popen(["/mnt/c/Windows/System32/TASKKILL.exe","/IM","Vizard.exe", "/F"])
-        time.sleep(1) # Give taskill some time to kill the task
-        self.viz_init = False
-        return 
-
-class scenario_OpNav(BSKSim):
+class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
     '''
     Simulates a spacecraft in LEO with atmospheric drag and J2.
 
@@ -127,79 +67,336 @@ class scenario_OpNav(BSKSim):
         '''
         Creates the simulation, but does not initialize the initial conditions.
         '''
-        super(scenario_OpNav, self).__init__(BSKSim)
-        self.fswRate = fswRate
         self.dynRate = dynRate
+        self.fswRate = fswRate
         self.step_duration = step_duration
 
-
-
-        self.set_DynModel(BSK_OpNavDynamics)
-        self.set_FswModel(BSK_OpNavFsw)
-        self.initInterfaces()
-        self.filterUse = "relOD"
-        self.configure_initial_conditions()
-        self.get_DynModel().vizInterface.opNavMode = 1
-
-        self.viz_manager = viz_manager()
-        self.viz_port = self.viz_manager.createViz(port=5000)
-        
+        SimulationBaseClass.SimBaseClass.__init__(self)
+        self.TotalSim.terminateSimulation()
 
         self.simTime = 0.0
-        self.numModes = 50
-        self.modeCounter = 0
 
-        self.obs = np.zeros([4,1])
-        self.sim_states = np.zeros([12,1])
+        self.DynModels = []
+        self.FSWModels = []
+
+        #   Initialize the dynamics+fsw task groups, modules
+
+        self.DynamicsProcessName = 'DynamicsProcess' #Create simulation process name
+        self.dynProc = self.CreateNewProcess(self.DynamicsProcessName) #Create process
+        self.dynTaskName = 'DynTask'
+        self.spiceTaskName = 'SpiceTask'
+        self.envTaskName = 'EnvTask'
+        self.dynTask = self.dynProc.addTask(self.CreateNewTask(self.dynTaskName, mc.sec2nano(self.dynRate)))
+        self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.step_duration)))
+        self.envTask = self.dynProc.addTask(self.CreateNewTask(self.envTaskName, mc.sec2nano(self.dynRate)))
+
+        self.obs = np.zeros([5,1])
+        self.sim_states = np.zeros([11,1])
+
+        self.set_dynamics()
+        self.set_fsw()
 
         self.set_logging()
-        # self.previousPointingGoal = "sunPointTask"
+        self.previousPointingGoal = "sunPointTask"
 
-        self.modeRequest = 'OpNavOD'
+        self.modeRequest = None
         self.InitializeSimulationAndDiscover()
 
         return
 
-    def configure_initial_conditions(self):
-        # Configure Dynamics initial conditions
-        oe = orbitalMotion.ClassicElements()
-        # oe.a = uniform(17000 * 1E3, 22000 * 1E3, 1)
-        # oe.e = uniform(0, 0.6, 1)
-        # oe.i = uniform(-20 * mc.D2R, 20 * mc.D2R, 1)
-        # oe.Omega = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
-        # oe.omega = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
-        # oe.f = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
 
-        oe.a = 18000 * 1E3  # meters
-        oe.e = 0.6
-        oe.i = 10 * mc.D2R
-        oe.Omega = 25. * mc.D2R
-        oe.omega = 190. * mc.D2R
-        oe.f = 80. * mc.D2R  # 90 good
-        mu = self.get_DynModel().marsGravBody.mu
+    def set_dynamics(self):
+        '''
+        Sets up the dynamics modules for the sim. This simulator runs:
+        scObject (spacecraft dynamics simulation)
+        SpiceObject
+        EclipseObject (simulates eclipse for simpleSolarPanel)
+        extForceTorque (attitude actuation)
+        simpleNav (attitude determination/sensing)
+        simpleSolarPanel (attitude-dependent power generation)
+        simpleBattery (power storage)
+        simplePowerNode (constant power draw)
 
-        rN, vN = orbitalMotion.elem2rv(mu, oe)
-        orbitalMotion.rv2elem(mu, rN, vN)
+        By default, parameters are set to those for a 6U cubesat.
+        :return:
+        '''
+        sc_number=0
 
-        print("ICs \n")
-        print(rN , "\n")
-        print(vN , "\n")
+        #   Spacecraft, Planet Setup
+        self.scObject = spacecraftPlus.SpacecraftPlus()
+        self.scObject.ModelTag = 'spacecraft'
 
-        rError = uniform(100000,-100000, 3)
-        vError = uniform(1000,-1000, 3)
-        MRP = [0, 0, 0]
-        self.get_FswModel().relativeODData.stateInit = (rN + rError).tolist() + (vN + vError).tolist()
-        self.get_DynModel().scObject.hub.r_CN_NInit = unitTestSupport.np2EigenVectorXd(rN)  # m   - r_CN_N
-        self.get_DynModel().scObject.hub.v_CN_NInit = unitTestSupport.np2EigenVectorXd(vN)  # m/s - v_CN_N
-        self.get_DynModel().scObject.hub.sigma_BNInit = [[MRP[0]], [MRP[1]], [MRP[2]]]  # sigma_BN_B
-        self.get_DynModel().scObject.hub.omega_BN_BInit = [[0.0], [0.0], [0.0]]  # rad/s - omega_BN_B
+        # clear prior gravitational body and SPICE setup definitions
+        self.gravFactory = simIncludeGravBody.gravBodyFactory()
+        # setup Spice interface for some solar system bodies
+        timeInitString = '2021 MAY 04 07:47:48.965 (UTC)'
+        self.gravFactory.createSpiceInterface(bskPath + '/supportData/EphemerisData/'
+                                              , timeInitString
+                                              , spicePlanetNames=["sun", "earth"]
+                                              )
 
-        qNoiseIn = np.identity(6)
-        qNoiseIn[0:3, 0:3] = qNoiseIn[0:3, 0:3] * 1E-3 * 1E-3
-        qNoiseIn[3:6, 3:6] = qNoiseIn[3:6, 3:6] * 1E-4 * 1E-4
-        self.get_FswModel().relativeODData.qNoise = qNoiseIn.reshape(36).tolist()
-        self.get_FswModel().imageProcessing.noiseSF = 1
-        self.get_FswModel().relativeODData.noiseSF = 5
+        self.gravFactory.spiceObject.zeroBase="earth" # Make sure that the Earth is the zero base
+
+        self.gravFactory.createSun()
+        planet = self.gravFactory.createEarth()
+        planet.isCentralBody = True  # ensure this is the central gravitational body
+        mu = planet.mu
+        # attach gravity model to spaceCraftPlus
+        self.scObject.gravField.gravBodies = spacecraftPlus.GravBodyVector(list(self.gravFactory.gravBodies.values()))
+
+        oe, rN,vN = leo_orbit.sampled_400km() # Pick a random orbit in LEO with an SMA of 400km
+
+        n = np.sqrt(mu / oe.a / oe.a / oe.a)
+        P = 2. * np.pi / n
+
+        width = 1.38
+        depth = 1.04
+        height = 1.58
+        mass = 330.
+        I = [1./12.*mass*(width**2. + depth**2.), 0., 0.,
+             0., 1./12.*mass*(depth**2. + height**2.), 0.,
+             0., 0.,1./12.*mass*(width**2. + height**2.)]
+
+        self.scObject.hub.mHub = mass # kg
+        self.scObject.hub.IHubPntBc_B = unitTestSupport.np2EigenMatrix3d(I)
+
+        self.scObject.hub.r_CN_NInit = unitTestSupport.np2EigenVectorXd(rN)
+        self.scObject.hub.v_CN_NInit = unitTestSupport.np2EigenVectorXd(vN)
+
+        sigma_init, omega_init = sc_attitudes.random_tumble(maxSpinRate = 0.00001)
+        self.scObject.hub.sigma_BNInit = sigma_init  # sigma_BN_B
+        self.scObject.hub.omega_BN_BInit = omega_init
+
+        self.sim_states[0:3,0] = np.asarray(self.scObject.hub.sigma_BNInit).flatten()
+        self.sim_states[3:6,0] = np.asarray(self.scObject.hub.r_CN_NInit).flatten()
+        self.sim_states[6:9,0] = np.asarray(self.scObject.hub.v_CN_NInit).flatten()
+
+        self.densityModel = exponentialAtmosphere.ExponentialAtmosphere()
+        self.densityModel.ModelTag = "expDensity"
+        self.densityModel.addSpacecraftToModel(self.scObject.scStateOutMsgName)
+        self.densityModel.planetRadius = orbitalMotion.REQ_EARTH * 1000.
+        self.densityModel.baseDensity = 1.22#  kg/m^3
+        self.densityModel.scaleHeight = 8e3 #   m
+
+        self.dragEffector = facetDragDynamicEffector.FacetDragDynamicEffector()
+        #   Set up the goemetry of a 6U cubesat
+        self.dragEffector.addFacet(0.2*0.3, 2.2, [1,0,0], [0.05, 0.0, 0])
+        self.dragEffector.addFacet(0.2*0.3, 2.2, [-1,0,0], [0.05, 0.0, 0])
+        self.dragEffector.addFacet(0.1*0.2, 2.2, [0,1,0], [0, 0.15, 0])
+        self.dragEffector.addFacet(0.1*0.2, 2.2, [0,-1,0], [0, -0.15, 0])
+        self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,1], [0,0, 0.1])
+        self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,-1], [0, 0, -0.1])
+        self.dragEffector.addFacet(1.*2., 2.2, [0,1,0],[0,2.,0])
+        self.dragEffector.addFacet(1.*2., 2.2, [0,-1,0],[0,2.,0])
+
+        self.dragEffector.atmoDensInMsgName = self.densityModel.envOutMsgNames[-1]
+        self.scObject.addDynamicEffector(self.dragEffector)
+
+        self.eclipseObject = eclipse.Eclipse()
+        self.eclipseObject.addPositionMsgName(self.scObject.scStateOutMsgName)
+        self.eclipseObject.addPlanetName('earth')
+
+        #   Disturbance Torque Setup
+        disturbance_magnitude = 2e-4
+        disturbance_vector = np.random.standard_normal(3)
+        unit_disturbance = disturbance_vector/np.linalg.norm(disturbance_vector)
+        self.extForceTorqueObject = extForceTorque.ExtForceTorque()
+        self.extForceTorqueObject.extTorquePntB_B = disturbance_magnitude * disturbance_vector
+        self.extForceTorqueObject.ModelTag = 'DisturbanceTorque'
+        self.extForceTorqueObject.cmdForceInertialInMsgName = 'disturbance_torque'
+        self.scObject.addDynamicEffector(self.extForceTorqueObject)
+
+        # Add reaction wheels to the spacecraft
+        self.rwStateEffector, rwFactory, initWheelSpeeds = ap.balancedHR16Triad(useRandom=True,randomBounds=(-800,800))
+        self.rwStateEffector.InputCmds = "rwTorqueCommand"
+        rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
+        self.rwConfigMsgName = "rwConfig"
+        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.rwConfigMsgName, rwFactory.getConfigMessage(), msgStrName="RWArrayConfigFswMsg")
+
+        #   Add thrusters to the spacecraft
+        self.thrusterSet, thrFactory = ap.idealMonarc1Octet()
+        self.thrusterSet.InputCmds = "rwDesatTimeOnCmd"
+        thrModelTag = "ACSThrusterDynamics"
+        self.thrusterConfigMsgName = "thrusterConfig"
+        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.thrusterConfigMsgName, thrFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
+        thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
+
+        #   Add simpleNav as a mock estimator to the spacecraft
+        self.simpleNavObject = simple_nav.SimpleNav()
+        self.simpleNavObject.ModelTag = 'SimpleNav'
+        self.simpleNavObject.inputStateName = self.scObject.scStateOutMsgName
+
+        #   Power Setup
+        self.solarPanel = simpleSolarPanel.SimpleSolarPanel()
+        self.solarPanel.ModelTag = 'solarPanel' + str(sc_number)
+        self.solarPanel.stateInMsgName = self.scObject.scStateOutMsgName
+        self.solarPanel.sunEclipseInMsgName = 'eclipse_data_'+str(sc_number)
+        self.solarPanel.sunInMsgName = 'sun_planet_data'
+        self.solarPanel.setPanelParameters(unitTestSupport.np2EigenVectorXd(np.array([0,1,0])), 0.2*0.3, 0.20)
+        self.solarPanel.nodePowerOutMsgName = "panelPowerMsg" + str(sc_number)
+
+        self.powerSink = simplePowerSink.SimplePowerSink()
+        self.powerSink.ModelTag = "powerSink" + str(sc_number)
+        self.powerSink.nodePowerOut = -5.  # Watts
+        self.powerSink.nodePowerOutMsgName = "powerSinkMsg" + str(sc_number)
+
+        self.powerMonitor = simpleBattery.SimpleBattery()
+        self.powerMonitor.ModelTag = "powerMonitor"
+        self.powerMonitor.batPowerOutMsgName = "powerMonitorMsg"
+        self.powerMonitor.storageCapacity = 20.0 * 3600.
+        self.powerMonitor.storedCharge_Init = np.random.uniform(8.*3600., 20.*3600., 1)[0]
+        self.powerMonitor.addPowerNodeToModel(self.solarPanel.nodePowerOutMsgName)
+        self.powerMonitor.addPowerNodeToModel(self.powerSink.nodePowerOutMsgName)
+
+        self.sim_states[9,0] = self.powerMonitor.storedCharge_Init
+        self.obs[0,0] = np.linalg.norm(self.scObject.hub.sigma_BNInit)
+        self.obs[1,0] = np.linalg.norm(self.scObject.hub.omega_BN_BInit)
+        self.obs[2,0] = np.linalg.norm(initWheelSpeeds)
+        self.obs[3,0] = self.powerMonitor.storedCharge_Init/3600.0
+
+
+
+        #   Add all the models to the dynamics task
+        self.AddModelToTask(self.dynTaskName, self.scObject)
+        self.AddModelToTask(self.spiceTaskName, self.gravFactory.spiceObject)
+        self.AddModelToTask(self.dynTaskName, self.densityModel)
+        self.AddModelToTask(self.dynTaskName, self.dragEffector)
+        self.AddModelToTask(self.dynTaskName, self.simpleNavObject)
+        self.AddModelToTask(self.dynTaskName, self.rwStateEffector)
+        self.AddModelToTask(self.dynTaskName, self.thrusterSet)
+        self.AddModelToTask(self.envTaskName, self.eclipseObject)
+        self.AddModelToTask(self.envTaskName, self.solarPanel)
+        self.AddModelToTask(self.envTaskName, self.powerMonitor)
+        self.AddModelToTask(self.envTaskName, self.powerSink)
+
+        return
+
+
+    def set_fsw(self):
+        '''
+        Sets up the attitude guidance stack for the simulation. This simulator runs:
+        inertial3Dpoint - Sets the attitude guidance objective to point the main panel at the sun.
+        hillPointTask: Sets the attitude guidance objective to point a "camera" angle towards nadir.
+        attitudeTrackingError: Computes the difference between estimated and guidance attitudes
+        mrpFeedbackControl: Computes an appropriate control torque given an attitude error
+        :return:
+        '''
+
+        self.processName = self.DynamicsProcessName
+        self.processTasksTimeStep = mc.sec2nano(self.fswRate)  # 0.5
+        self.dynProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),taskPriority=100)
+        self.dynProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),taskPriority=100)
+        self.dynProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), taskPriority=50)
+        self.dynProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), taskPriority=100)
+
+        #   Specify the vehicle configuration message to tell things what the vehicle inertia is
+        vehicleConfigOut = fswMessages.VehicleConfigFswMsg()
+        # use the same inertia in the FSW algorithm as in the simulation
+        #   Set inertia properties to those of a solid 6U cubeoid:
+        width = 1.38
+        depth = 1.04
+        height = 1.58
+        mass = 330.
+        I = [1. / 12. * mass * (width ** 2. + depth ** 2.), 0., 0.,
+             0., 1. / 12. * mass * (depth ** 2. + height ** 2.), 0.,
+             0., 0., 1. / 12. * mass * (width ** 2. + height ** 2.)]
+
+        vehicleConfigOut.ISCPntB_B = I
+        unitTestSupport.setMessage(self.TotalSim,
+                                   self.DynamicsProcessName,
+                                   "adcs_config_data",
+                                   vehicleConfigOut)
+
+
+        #   Sun pointing configuration
+
+        self.sunPointData = inertial3D.inertial3DConfig()
+        self.sunPointWrap = self.setModelDataWrap(self.sunPointData)
+        self.sunPointWrap.ModelTag = "sunPoint"
+        self.sunPointData.outputDataName = "att_reference"
+        self.sunPointData.sigma_R0N = [1,0,0]
+
+        #   Earth pointing configuration
+        self.hillPointData = hillPoint.hillPointConfig()
+        self.hillPointWrap = self.setModelDataWrap(self.hillPointData)
+        self.hillPointWrap.ModelTag = "hillPoint"
+        self.hillPointData.outputDataName = "att_reference"
+        self.hillPointData.inputNavDataName = self.simpleNavObject.outputTransName
+        self.hillPointData.inputCelMessName = self.gravFactory.gravBodies['earth'].bodyInMsgName
+
+        #   Attitude error configuration
+        self.trackingErrorData = attTrackingError.attTrackingErrorConfig()
+        self.trackingErrorWrap = self.setModelDataWrap(self.trackingErrorData)
+        self.trackingErrorWrap.ModelTag = "trackingError"
+        self.trackingErrorData.inputNavName = self.simpleNavObject.outputAttName
+        # Note: SimBase.DynModels.simpleNavObject.outputAttName = "simple_att_nav_output"
+        self.trackingErrorData.inputRefName = "att_reference"
+        self.trackingErrorData.outputDataName = "att_guidance"
+
+        # add module that maps the Lr control torque into the RW motor torques
+        self.rwMotorTorqueConfig = rwMotorTorque.rwMotorTorqueConfig()
+        self.rwMotorTorqueWrap = self.setModelDataWrap(self.rwMotorTorqueConfig)
+        self.rwMotorTorqueWrap.ModelTag = "rwMotorTorque"
+        self.rwMotorTorqueConfig.outputDataName = self.rwStateEffector.InputCmds
+        self.rwMotorTorqueConfig.rwParamsInMsgName = "rwConfig"
+        self.rwMotorTorqueConfig.inputVehControlName = "commandedControlTorque"
+        controlAxes_B = [1, 0, 0,
+                         0, 1, 0,
+                         0, 0, 1]
+        self.rwMotorTorqueConfig.controlAxes_B = controlAxes_B
+
+        #   Attitude controller configuration
+        self.mrpFeedbackControlData = MRP_Feedback.MRP_FeedbackConfig()
+        self.mrpFeedbackControlWrap = self.setModelDataWrap(self.mrpFeedbackControlData)
+        self.mrpFeedbackControlWrap.ModelTag = "mrpFeedbackControl"
+        self.mrpFeedbackControlData.inputGuidName = "att_guidance"
+        self.mrpFeedbackControlData.vehConfigInMsgName = "adcs_config_data"
+        self.mrpFeedbackControlData.outputDataName = self.rwMotorTorqueConfig.inputVehControlName
+        self.mrpFeedbackControlData.K = 7
+        self.mrpFeedbackControlData.Ki = -1.0  # Note: make value negative to turn off integral feedback
+        self.mrpFeedbackControlData.P = 35
+        self.mrpFeedbackControlData.integralLimit = 2. / self.mrpFeedbackControlData.Ki * 0.1
+
+        #   Momentum dumping configuration
+        self.thrDesatControlConfig = thrMomentumManagement.thrMomentumManagementConfig()
+        self.thrDesatControlWrap = self.setModelDataWrap(self.thrDesatControlConfig)
+        self.thrDesatControlWrap.ModelTag = "thrMomentumManagement"
+        self.thrDesatControlConfig.hs_min = 4.  # Nms
+        self.thrDesatControlConfig.rwSpeedsInMsgName = self.rwStateEffector.OutputDataString
+        self.thrDesatControlConfig.rwConfigDataInMsgName = self.rwConfigMsgName
+        self.thrDesatControlConfig.deltaHOutMsgName = "wheelDeltaH"
+
+        # setup the thruster force mapping module
+        self.thrForceMappingConfig = thrForceMapping.thrForceMappingConfig()
+        self.thrForceMappingWrap = self.setModelDataWrap(self.thrForceMappingConfig)
+        self.thrForceMappingWrap.ModelTag = "thrForceMapping"
+        self.thrForceMappingConfig.inputVehControlName = self.thrDesatControlConfig.deltaHOutMsgName
+        self.thrForceMappingConfig.inputThrusterConfName = self.thrusterConfigMsgName
+        self.thrForceMappingConfig.inputVehicleConfigDataName = self.mrpFeedbackControlData.vehConfigInMsgName
+        self.thrForceMappingConfig.outputDataName = "delta_p_achievable"
+        self.thrForceMappingConfig.controlAxes_B = controlAxes_B
+        self.thrForceMappingConfig.thrForceSign = 1
+
+        self.thrDumpConfig = thrMomentumDumping.thrMomentumDumpingConfig()
+        self.thrDumpWrap = self.setModelDataWrap(self.thrDumpConfig)
+        self.thrDumpConfig.deltaHInMsgName = self.thrDesatControlConfig.deltaHOutMsgName
+        self.thrDumpConfig.thrusterImpulseInMsgName = "delta_p_achievable"
+        self.thrDumpConfig.thrusterOnTimeOutMsgName = self.thrusterSet.InputCmds
+        self.thrDumpConfig.thrusterConfInMsgName = self.thrusterConfigMsgName
+        self.thrDumpConfig.maxCounterValue = 4
+        self.thrDumpConfig.thrMinFireTime = 0.002 #   Seconds
+
+        #   Add models to tasks
+        self.AddModelToTask("sunPointTask", self.sunPointWrap, self.sunPointData)
+        self.AddModelToTask("nadirPointTask", self.hillPointWrap, self.hillPointData)
+
+        self.AddModelToTask("mrpControlTask", self.mrpFeedbackControlWrap, self.mrpFeedbackControlData)
+        self.AddModelToTask("mrpControlTask", self.trackingErrorWrap, self.trackingErrorData)
+        self.AddModelToTask("mrpControlTask", self.rwMotorTorqueWrap, self.rwMotorTorqueConfig)
+
+        self.AddModelToTask("rwDesatTask", self.thrDesatControlWrap, self.thrDesatControlConfig)
+        self.AddModelToTask("rwDesatTask", self.thrForceMappingWrap, self.thrForceMappingConfig)
+        self.AddModelToTask("rwDesatTask", self.thrDumpWrap, self.thrDumpConfig)
 
 
     def set_logging(self):
@@ -216,9 +413,31 @@ class scenario_OpNav(BSKSim):
         samplingTime = mc.sec2nano(self.dynRate)
 
         #   Log planet, sun positions
-        self.TotalSim.logThisMessage(self.get_FswModel().relativeODData.filtDataOutMsgName, samplingTime)
-        self.TotalSim.logThisMessage(self.get_DynModel().SimpleNavObject.outputAttName, samplingTime)
-        self.TotalSim.logThisMessage(self.get_DynModel().scObject.scStateOutMsgName, samplingTime)
+
+        #self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
+        self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
+        #   Log inertial attitude, position
+        self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
+        self.TotalSim.logThisMessage(self.simpleNavObject.outputTransName,
+                                               samplingTime)
+        self.TotalSim.logThisMessage(self.simpleNavObject.outputAttName,
+                                     samplingTime)
+        self.TotalSim.logThisMessage(self.rwStateEffector.OutputDataString,
+                                     samplingTime)
+        #   Log FSW error portrait
+        self.TotalSim.logThisMessage("att_reference", samplingTime)
+        self.TotalSim.logThisMessage(self.trackingErrorData.outputDataName, samplingTime)
+        self.TotalSim.logThisMessage(self.mrpFeedbackControlData.outputDataName, samplingTime)
+
+        #   Log system power status
+        self.TotalSim.logThisMessage(self.powerMonitor.batPowerOutMsgName,
+                                               samplingTime)
+
+        #   Eclipse indicator
+        self.TotalSim.logThisMessage(self.solarPanel.sunEclipseInMsgName, samplingTime)
+
+        #   Desat debug parameters
+        #self.TotalSim.logThisMessage(self.thrDesatControlConfig.deltaHOutMsgName, samplingTime)
 
         return
 
@@ -230,70 +449,94 @@ class scenario_OpNav(BSKSim):
         :return:
         '''
 
-        # self.modeRequest = str(action)
+        self.modeRequest = str(action)
 
         self.sim_over = False
-        self.modeCounter+=1
 
         currentResetTime = mc.sec2nano(self.simTime)
-        if str(action) == "0":
-            # self.get_DynModel().cameraMod.cameraIsOn = 1
-            # self.modeRequest = 'OpNavOD'
+        if self.modeRequest == "0":
+            #print('starting nadir pointing...')
+            #   Set up a nadir pointing mode
+            self.dynProc.enableAllTasks()
+            self.hillPointWrap.Reset(currentResetTime)
+            self.trackingErrorWrap.Reset(currentResetTime)
 
-            self.fswProc.disableAllTasks()
-            self.enableTask('opNavPointTaskCheat')
-            self.enableTask('mrpFeedbackRWsTask')
-            self.enableTask('opNavODTask')
+            self.disableTask('sunPointTask')
+            self.disableTask('rwDesatTask')
 
+            self.enableTask('nadirPointTask')
+            self.enableTask('mrpControlTask')
 
-        elif str(action) == "1":
-            self.get_DynModel().cameraMod.cameraIsOn = 0
-            # self.modeRequest = "sunSafePoint"
-            self.fswProc.disableAllTasks()
-            self.enableTask('sunSafePointTask')
-            self.enableTask('mrpFeedbackRWsTask')
+        elif self.modeRequest == "1":
+            #print('starting sun pointing...')
+            #   Set up a sun pointing mode
+            self.dynProc.enableAllTasks()
+            self.sunPointWrap.Reset(currentResetTime)
+            self.trackingErrorWrap.Reset(currentResetTime)
+
+            self.disableTask('nadirPointTask')
+            self.disableTask('rwDesatTask')
+
+            self.enableTask('sunPointTask')
+            self.enableTask('mrpControlTask')
+
+        elif self.modeRequest == "2":
+            #   Set up a desat mode
+            self.dynProc.enableAllTasks()
+            self.sunPointWrap.Reset(currentResetTime)
+            self.trackingErrorWrap.Reset(currentResetTime)
+
+            self.thrDesatControlWrap.Reset(currentResetTime)
+            self.thrDumpWrap.Reset(currentResetTime)
+
+            self.disableTask('nadirPointTask')
+            self.disableTask('sunPointTask')
+
+            self.enableTask('sunPointTask')
+            self.enableTask('mrpControlTask')
+            self.enableTask('rwDesatTask')
 
         self.simTime += self.step_duration
-        simulationTime = mc.min2nano(self.simTime)
+        simulationTime = mc.sec2nano(self.simTime)
 
         #   Execute the sim
         self.ConfigureStopTime(simulationTime)
         self.ExecuteSimulation()
 
-        NUM_STATES = 6
         #   Pull logged message data and return it as an observation
         simDict = self.pullMultiMessageLogData([
-            self.get_DynModel().scObject.scStateOutMsgName + '.r_BN_N',
-            self.get_DynModel().scObject.scStateOutMsgName + '.v_BN_N',
-            self.get_DynModel().scObject.scStateOutMsgName + '.sigma_BN',
-            self.get_DynModel().SimpleNavObject.outputAttName + '.vehSunPntBdy',
-            self.get_FswModel().relativeODData.filtDataOutMsgName + ".state",
-            self.get_FswModel().relativeODData.filtDataOutMsgName + ".covar"
-        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(NUM_STATES)), list(range(NUM_STATES*NUM_STATES))], ['float']*6,numRecords=1)
+            'sun_planet_data.PositionVector',
+            self.scObject.scStateOutMsgName + '.sigma_BN',
+            self.scObject.scStateOutMsgName + '.r_BN_N',
+            self.scObject.scStateOutMsgName + '.v_BN_N',
+            "att_reference.sigma_RN",
+            self.simpleNavObject.outputAttName + '.omega_BN_B',
+            self.trackingErrorData.outputDataName + '.sigma_BR',
+            self.rwStateEffector.OutputDataString + '.wheelSpeeds',
+            self.powerMonitor.batPowerOutMsgName + '.storageLevel',
+            self.solarPanel.sunEclipseInMsgName + '.shadowFactor'
+        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)),
+            list(range(1)), list(range(1)),], 1)
 
-        # sunHead = simDict["sun_planet_data" + ".PositionVector"]
-        sunHead_B = simDict[self.get_DynModel().SimpleNavObject.outputAttName + '.vehSunPntBdy']
-        position_N = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.r_BN_N']
-        sigma_BN = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.sigma_BN']
-        velocity_N = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.v_BN_N']
-        navState = simDict[self.get_FswModel().relativeODData.filtDataOutMsgName + ".state"]
-        navCovar = simDict[self.get_FswModel().relativeODData.filtDataOutMsgName + ".covar"]
+        attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
+        attRef = simDict["att_reference.sigma_RN"]
+        attRate = simDict[self.simpleNavObject.outputAttName + '.omega_BN_B']
+        storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
+        eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
+        wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
 
-        # mu = self.get_DynModel().marsGravBody.mu
-        # oe = orbitalMotion.rv2elem_parab(mu, navState[-1,1:4], navState[-1,4:7])
-        covarVec = np.array([np.sqrt(navCovar[-1,1]), np.sqrt(navCovar[-1,2 + NUM_STATES]), np.sqrt(navCovar[-1,3 + 2*NUM_STATES])])
+        sunPosition = simDict['sun_planet_data.PositionVector']
+        inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
+        inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
+        inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
 
-        BN = rbk.MRP2C(sigma_BN[-1,1:4])
-        pos_B = -np.dot(BN, navState[-1,1:4]/np.linalg.norm(navState[-1,1:4]))
-        sunHeadNorm = sunHead_B[-1,1:4]/np.linalg.norm(sunHead_B[-1,1:4])
-        sunMarsAngle = np.dot(pos_B, sunHeadNorm)
-
-        debug = np.hstack([navState[-1,1:4], position_N[-1,1:4], velocity_N[-1,1:4], sigma_BN[-1,1:4]])
-        obs = np.hstack([sunMarsAngle, covarVec/np.linalg.norm(navState[-1,1:4])])
+        debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
+        obs = np.hstack([np.linalg.norm(attErr[-1,1:4]), np.linalg.norm(attRate[-1,1:4]), np.linalg.norm(wheelSpeeds[-1,1:4]),
+                         storedCharge[-1,1]/3600., eclipseIndicator[-1,1]])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = debug.reshape(len(debug), 1)
 
-        if self.modeCounter >= self.numModes:
+        if np.linalg.norm(inertialPos[-1,1:4]) < (orbitalMotion.REQ_EARTH/1000.):
             self.sim_over = True
 
         return self.obs, self.sim_states, self.sim_over
@@ -303,155 +546,48 @@ class scenario_OpNav(BSKSim):
         makes sure spice gets shut down right when we close.
         :return:
         """
-        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de430.bsp')
-        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'naif0012.tls')
-        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de-403-masses.tpc')
-        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'pck00010.tpc')
-
-        self.viz_manager.stopViz()
-        # try:
-        #     os.kill(self.child.pid + 1, signal.SIGKILL)
-        #     print("Closing Vizard")
-        # except:
-        #     print("IDK how to turn this thing off")
+        self.gravFactory.unloadSpiceKernels()
         return
 
-def create_scenario_OpNav():
-    return scenario_OpNav(1., 5., 50.)
+def create_leoPowerAttSimulator():
+    return LEOPowerAttitudeSimulator(0.1, 0.1, 60.)
 
 if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-         
-    actHist = [1, 1, 0, 0, 1, 1, 1, 0, 0, 1]
-    sim = scenario_OpNav(0.5, 5., 50.)
+    sim = LEOPowerAttitudeSimulator(0.1,1.0, 60.)
     obs = []
     states = []
-    rewardList = []
     normWheelSpeed = []
     actList = []
     from matplotlib import pyplot as plt
     from random import randrange
+    plt.figure()
 
-    tFinal = len(actHist)
-    rewardList.append(np.nan)
-    for ind in range(0,len(actHist)):
-        act = actHist[ind]#(ind-1)%2 #randrange(2)
-        print("act = ",act)
+    tFinal = 2*180
+    for ind in range(0,tFinal):
+        act = 0#randrange(3)
         actList.append(act)
         ob, state, _ = sim.run_sim(act)
-        reward = 0
-        if act == 1:
-            real = np.array([state[3],state[4], state[5]])
-            nav = np.array([state[0],state[1], state[2]])
-            nav -= real
-            nav *= 1./np.linalg.norm(real)
-            reward = np.linalg.norm(1./ (1. + np.linalg.norm(nav)**2.0))
-        rewardList.append(reward)
-
+        #normWheelSpeed.append(np.linalg.norm(abs(ob[3:6])))
         obs.append(ob)
         states.append(state)
     obs = np.asarray(obs)
     states = np.asarray(states)
 
-    try:
-        child.terminate()
-    except:
-        print("os.kill failed; fear for your lives")
+    plt.plot(range(0,tFinal),obs[:,0], label="sigma_BR")
+    plt.plot(range(0,tFinal),obs[:,1], label="omega_BN")
+    plt.plot(range(0,tFinal),obs[:,2], label="omega_rw")
+    plt.plot(range(0,tFinal), obs[:,3], label= "J_bat")
+    plt.plot(range(0,tFinal),obs[:,4], label="eclipse_ind")
+    plt.legend()
 
 
-    """Check results here"""
-    colorsInt = len(mpl.cm.get_cmap("inferno").colors)/(10)
-    colorList = []
-    for i in range(10):
-        colorList.append(mpl.cm.get_cmap("inferno").colors[int(i*colorsInt)])
-
-    totalReward = [0]
-    for ind in range(1, tFinal+1):
-        totalReward.append(totalReward[-1] + rewardList[ind])
-
-    plt.figure(num=22, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
-    plt.plot(rewardList, label='Mode-wise Reward', color=colorList[3])
-    plt.plot(totalReward, label='Summed Reward', color=colorList[7])
-    ax = plt.gca()
-    for ind in range(0, tFinal):
-        if actHist[ind] == 0:
-            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
-        if actHist[ind] == 1:
-            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
-    plt.ylabel('Reward')
-    plt.xlabel('Modes (-)')
-    plt.legend(loc='best')
-    plt.tight_layout()
-    plt.savefig('OpNav_Reward_History.pdf')
-
-    nav = np.zeros(len(states[:,0]))
-    covar = np.zeros(len(states[:,0]))
-
-    nav1 = np.copy(states[:,0])
-    nav1 -= states[:,3]
-    nav2 = np.copy(states[:, 1])
-    nav2 -= states[:, 4]
-    nav3 = np.copy(states[:, 2])
-    nav3 -= states[:, 5]
-
-    for i in range(len(states[:,0])):
-        nav[i] = np.linalg.norm(np.array([nav1[i],nav2[i],nav3[i]]))/ np.linalg.norm(np.array([nav1[0],nav2[0],nav3[0]]))
-        covar[i] = np.linalg.norm(np.array([obs[i, 1],obs[i, 2],obs[i, 3]]))/np.linalg.norm(np.array([obs[0, 1],obs[0, 2],obs[0, 3]]))
-
-    plt.figure(num=1, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
-    plt.plot(range(1,tFinal+1), nav, label="$\hat{\mathbf{r}}$", color = colorList[3])
-    plt.plot(range(1,tFinal+1), covar, label="$\hat{\mathrm{P}}$", color = colorList[8])
-    ax = plt.gca()
-    for ind in range(0, tFinal):
-        if actHist[ind] == 0:
-            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
-        if actHist[ind] == 1:
-            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
-    plt.legend(loc='best')
-    plt.ylabel('Normalized States')
-    plt.xlabel('Modes (-)')
-    plt.savefig('ActionsNav.pdf')
-
-    plt.figure(num=11, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
-    plt.plot(range(1,tFinal+1),obs[:,0], label="Angle")
-    plt.plot(range(1,tFinal+1),covar, label="$\hat{\mathrm{P}}$")
-    ax = plt.gca()
-    for ind in range(0, tFinal):
-        if actHist[ind] == 0:
-            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
-        if actHist[ind] == 1:
-            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
-    plt.legend(loc='best')
-    plt.ylabel('Eclipse Angle vs Covar')
-    plt.xlabel('Modes (-)')
-    plt.savefig('AngleCovar.pdf')
-    # plt.figure()
-    # plt.plot(range(0,tFinal),nav1, label="nav1", color = 'r')
-    # plt.plot(range(0,tFinal), nav2, label="nav2", color = 'g')
-    # plt.plot(range(0,tFinal),nav3, label="nav3", color = 'b')
-    # plt.plot(range(0, tFinal), obs[:, 1], label="cov1", color = 'r')
-    # plt.plot(range(0, tFinal), obs[:, 2], label="cov2", color = 'g')
-    # plt.plot(range(0, tFinal), obs[:, 3], label="cov3", color = 'b')
-    # plt.legend()
-
-
-    plt.figure(num=2, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
-    plt.plot(range(1,tFinal+1),states[:,9], label="$\sigma_1$",  color = colorList[5])
-    plt.plot(range(1,tFinal+1),states[:,10], label="$\sigma_2$", color = colorList[6])
-    plt.plot(range(1,tFinal+1),states[:,11], label="$\sigma_3$", color = colorList[7])
-    ax = plt.gca()
-    for ind in range(0, tFinal):
-        if actHist[ind] == 0:
-            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
-        if actHist[ind] == 1:
-            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
-    plt.legend(loc='best')
-    plt.ylabel('Attitude')
-    plt.xlabel('Modes (-)')
-    plt.savefig('AttModes.pdf')
-
+    plt.figure()
+    plt.plot(states[:, 3]/1000., states[:, 4]/1000., label="Orbit")
+    #plt.plot(states[:,12]/1000., states[:,13]/1000, label="Sun Position")
+    plt.legend()
 
     plt.show()
 

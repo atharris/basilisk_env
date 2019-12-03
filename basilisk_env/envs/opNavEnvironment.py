@@ -1,26 +1,27 @@
 # 3rd party modules
 import gym
 import numpy as np
-import subprocess
-import os
+import scipy as sci
+from scipy.linalg import expm
 from gym import spaces
 
-from basilisk_env.simulators import opNavSimulator
+from basilisk_env.simulators import leoPowerAttitudeSimulator
+from Basilisk.utilities import macros as mc
+from Basilisk.utilities import orbitalMotion as om
 
 
-
-class opNavEnv(gym.Env):
+class leoPowerAttEnv(gym.Env):
     """
-    OpNav scenario. The spacecraft must decide when to point at the ground (which generates a
+    Simple attitude/orbit control problem. The spacecraft must decide when to point at the ground (which generates a
     reward) versus pointing at the sun (which increases the sim duration).
     """
 
     def __init__(self):
-        self.__version__ = "0.0.2"
-        print("Basilisk OpNav Mode Management Sim - Version {}".format(self.__version__))
+        self.__version__ = "0.0.1"
+        print("Basilisk Attitude Mode Management Sim - Version {}".format(self.__version__))
 
         # General variables defining the environment
-        self.max_length =int(40) # Specify the maximum number of planning intervals
+        self.max_length =int(3*180) # Specify the maximum number of planning intervals
 
         #   Tell the environment that it doesn't have a sim attribute...
         self.sim_init = 0
@@ -28,19 +29,19 @@ class opNavEnv(gym.Env):
         self.reward_total = 0
 
         #   Set up options, constants for this environment
-        self.step_duration = 50.  # Set step duration equal to 60 minute
+        self.step_duration = 180.  # Set step duration equal to 1 minute (180min ~ 2 orbits)
         self.reward_mult = 1.
         low = -1e16
         high = 1e16
-        self.observation_space = spaces.Box(low, high,shape=(4,1))
-        self.obs = np.zeros([4,])
-        self.debug_states = np.zeros([12,])
+        self.observation_space = spaces.Box(low, high,shape=(5,1))
+        self.obs = np.zeros([5,])
+
         ##  Action Space description
         #   0 - earth pointing (mission objective)
         #   1 - sun pointing (power objective)
         #   2 - desaturation (required for long-term pointing)
 
-        self.action_space = spaces.Discrete(2)
+        self.action_space = spaces.Discrete(3)
 
         # Store what the agent tried
         self.curr_episode = -1
@@ -81,15 +82,9 @@ class opNavEnv(gym.Env):
                  use this for learning.
         """
 
-        if self.sim_init == 0:
-            
-            self.simulator = opNavSimulator.scenario_OpNav(1., 1., self.step_duration)
-            self.sim_init = 1
-
-        
-
-        if self.curr_step%10 == 0:
-            print("At step ", self.curr_step, " of ", self.max_length)
+        if self.simulator_init == 0:
+            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+            self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
             self.episode_over = True
@@ -101,10 +96,24 @@ class opNavEnv(gym.Env):
         self.reward_total += reward
         ob = self._get_state()
 
+        #   If the wheel speeds get too large, end the episode.
+        if ob[2] > 3000*mc.RPM:
+            self.episode_over = True
+            self.reward_total -= 50
+            print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(3000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
+            print("Prior state was RPM:"+str(prev_ob[2])+" . body rate was:"+str(prev_ob[1]))
+
+
+        #   If we run out of power, end the episode.
+        if ob[3] == 0:
+            self.episode_over = True
+            self.reward_total -= 50
+            print("Ran out of power. Battery level at:"+str(ob[3])+", env step"+str(self.curr_step))
+
         if self.sim_over:
             self.episode_over = True
-            print("End of episode")
-            
+            print("Orbit decayed - no penalty, but this one is over.")
+
 
         if self.episode_over:
             info = {'episode':{
@@ -114,7 +123,6 @@ class opNavEnv(gym.Env):
                 'obs': ob
             }
             self.simulator.close_gracefully() # Stop spice from blowing up
-            self.sim_init = 0
         else:
             info={
                 'full_states': self.debug_states,
@@ -142,13 +150,9 @@ class opNavEnv(gym.Env):
 
         """
         reward = 0
-        real = np.array([self.debug_states[3],self.debug_states[4], self.debug_states[5]])
-        nav = np.array([self.debug_states[0],self.debug_states[1], self.debug_states[2]])
-        nav -= real
-        nav *= 1./np.linalg.norm(real)
 
-        if self.action_episode_memory[self.curr_episode][-1] == 1:
-            reward = np.linalg.norm(self.reward_mult / (1. + np.linalg.norm(nav)**2.0))
+        if self.action_episode_memory[self.curr_episode][-1] == 0:
+            reward = np.linalg.norm(self.reward_mult / (1. + self.obs[0]**2.0))
         return reward
 
     def reset(self):
@@ -163,8 +167,10 @@ class opNavEnv(gym.Env):
         self.episode_over = False
         self.curr_step = 0
         self.reward_total = 0
-        self.simulator = opNavSimulator.scenario_OpNav(1., 1., self.step_duration)
-        self.sim_init=1
+
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+        self.simulator_init = 1
+        self.seed()
 
         return self.simulator.obs
 

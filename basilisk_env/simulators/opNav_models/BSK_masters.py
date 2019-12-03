@@ -32,10 +32,9 @@ sys.path.append(path + '/models')
 
 
 class BSKSim(SimulationBaseClass.SimBaseClass):
-    def __init__(self, fswRate=0.1, dynRate=0.1, viz_port=5000):
+    def __init__(self, fswRate=0.1, dynRate=0.1):
         self.dynRate = dynRate
         self.fswRate = fswRate
-        self.viz_port = viz_port
         # Create a sim module as an empty container
         SimulationBaseClass.SimBaseClass.__init__(self)
         self.TotalSim.terminateSimulation()
@@ -54,7 +53,7 @@ class BSKSim(SimulationBaseClass.SimBaseClass):
         self.dynamics_added = True
         self.DynamicsProcessName = 'DynamicsProcess' #Create simulation process name
         self.dynProc = self.CreateNewProcess(self.DynamicsProcessName, 100) #Create process
-        self.DynModels = dynModel.BSKDynamicModels(self, self.dynRate, self.viz_port) #Create Dynamics and FSW classes
+        self.DynModels = dynModel.BSKDynamicModels(self, self.dynRate) #Create Dynamics and FSW classes
 
     def get_FswModel(self):
         assert (self.fsw_added is True), "A flight software model has not been added yet"

@@ -1,31 +1,22 @@
-#
-#  ISC License
-#
-#  Copyright (c) 2016, Autonomous Vehicle Systems Lab, University of Colorado at Boulder
-#
-#  Permission to use, copy, modify, and/or distribute this software for any
-#  purpose with or without fee is hereby granted, provided that the above
-#  copyright notice and this permission notice appear in all copies.
-#
-#  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-#  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-#  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-#  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-#  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-#  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-#  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-#
-r"""
-Overview
---------
+''' '''
+'''
+ ISC License
 
-``OpNavScenarios/models/BSK_OpNavDynamics.py`` is similar to the :ref:`Folder_BskSim` versions seen previously.
-The main additions are
-the instantiation of :ref:`vizInterface`, and the camera module.
+ Copyright (c) 2016, Autonomous Vehicle Systems Lab, University of Colorado at Boulder
 
+ Permission to use, copy, modify, and/or distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
 
-"""
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+'''
 
 import numpy as np
 import math, sys, os, inspect
@@ -33,30 +24,29 @@ from Basilisk.utilities import macros as mc
 from Basilisk.utilities import unitTestSupport as sp
 from Basilisk.simulation import (spacecraftPlus, gravityEffector, extForceTorque, simple_nav, spice_interface,
                                  reactionWheelStateEffector, coarse_sun_sensor, eclipse, alg_contain, bore_ang_calc,
-                                 thrusterDynamicEffector, ephemeris_converter, vizInterface,
+                                 thrusterDynamicEffector, simFswInterfaceMessages, ephemeris_converter, vizInterface,
                                  camera)
 from Basilisk.utilities import simIncludeThruster, simIncludeRW, simIncludeGravBody, unitTestSupport
 from Basilisk.utilities import RigidBodyKinematics as rbk
-from Basilisk.topLevelModules import pyswice
+from Basilisk import pyswice
 from Basilisk import __path__
 
-from Basilisk.fswAlgorithms import attTrackingError
+from Basilisk.fswAlgorithms import attTrackingError, rwMotorVoltage, fswMessages
 
 bskPath = __path__[0]
 filename = inspect.getframeinfo(inspect.currentframe()).filename
 path = os.path.dirname(os.path.abspath(filename))
 
+
+
+
 class BSKDynamicModels():
-    """
-    BSK Dynamics model for the op nav simulations
-    """
-    def __init__(self, SimBase, dynRate, viz_port):
+    def __init__(self, SimBase, dynRate):
         # Define process name, task name and task time-step
         self.processName = SimBase.DynamicsProcessName
         self.taskName = "DynamicsTask"
         self.taskCamera = "CameraTask"
         self.processTasksTimeStep = mc.sec2nano(dynRate)
-        self.viz_port = viz_port
         # Create task
         SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskName, self.processTasksTimeStep), 1000)
         SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskCamera, mc.sec2nano(60)), 999)
@@ -68,7 +58,7 @@ class BSKDynamicModels():
 
         self.SpiceObject = spice_interface.SpiceInterface()
         self.scObject = spacecraftPlus.SpacecraftPlus()
-        self.gravFactory = simIncludeGravBody.gravBodyFactory()
+        # self.gravFactory = simIncludeGravBody.gravBodyFactory()
         self.extForceTorqueObject = extForceTorque.ExtForceTorque()
         self.SimpleNavObject = simple_nav.SimpleNav()
         self.TruthNavObject = simple_nav.SimpleNav()
@@ -124,7 +114,7 @@ class BSKDynamicModels():
         # self.cameraMod.darkCurrent = 0
         # self.cameraMod.saltPepper = 0.5
         # self.cameraMod.cosmicRays = 1
-        self.cameraMod.blurParam = 3
+        # self.cameraMod.blurParam = 3
 
         # Camera config
         self.cameraMod.cameraIsOn = 1
@@ -136,11 +126,13 @@ class BSKDynamicModels():
         self.cameraMod.cameraPos_B = [0., 0.2, 0.2]  # in meters
         self.cameraRez = [512, 512]  #[1024,1024] # in pixels
         self.cameraSize = [10.*1E-3, self.cameraRez[1]/self.cameraRez[0]*10.*1E-3]  # in m
+        self.cameraMod.sensorSize = self.cameraSize
         self.cameraMod.resolution = self.cameraRez
-        self.cameraMod.fieldOfView = np.deg2rad(55)
+        self.cameraMod.fieldOfView = np.deg2rad(55)  # in degrees
+        self.cameraMod.focalLength = self.cameraMod.sensorSize[1]/2./np.tan(self.cameraMod.fieldOfView/2.) #in m
         self.cameraMod.parentName = 'inertial'
         self.cameraMod.skyBox = 'black'
-        self.cameraFocal = self.cameraSize[1]/2./np.tan(self.cameraMod.fieldOfView/2.) #in m
+        self.cameraFocal = self.cameraMod.focalLength
 
 
     def SetVizInterface(self):
@@ -153,12 +145,7 @@ class BSKDynamicModels():
             os.mkdir(home + '_VizFiles')
         fileName = home + '_VizFiles/' + name
 
-        scData = vizInterface.VizSpacecraftData()
-        scData.spacecraftName = 'inertial'
-        self.vizInterface.scData.push_back(scData)
-        self.vizInterface.comAddress = os.environ['viz_address']
-        self.vizInterface.comPortNumber = str(self.viz_port)
-        self.vizInterface.opNavMode = 2
+        self.vizInterface.spacecraftName = 'inertial'
         self.vizInterface.opnavImageOutMsgName = "unity_image"#"opnav_image"#
         self.vizInterface.spiceInMsgName = vizInterface.StringVector(["earth_planet_data",
                                                                 "mars barycenter_planet_data",
