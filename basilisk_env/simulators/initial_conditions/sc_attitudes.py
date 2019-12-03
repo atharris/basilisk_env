@@ -1,6 +1,6 @@
 import numpy as np
 
-def random_tumble(maxSpinRate = 0.1):
+def random_tumble(maxSpinRate = 0.001):
     """
     Simulates a spacecraft in a random tumble with uniformly sampled initial conditions.
     :return: sigma_bn
