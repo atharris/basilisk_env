@@ -31,6 +31,7 @@ class leoPowerAttEnv(gym.Env):
         #   Set up options, constants for this environment
         self.step_duration = 180.  # Set step duration equal to 1 minute (180min ~ 2 orbits)
         self.reward_mult = 1.
+        self.failure_penalty = -50
         low = -1e16
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(5,1))
@@ -99,7 +100,7 @@ class leoPowerAttEnv(gym.Env):
         #   If the wheel speeds get too large, end the episode.
         if ob[2] > 3000*mc.RPM:
             self.episode_over = True
-            self.reward_total -= 50
+            self.reward_total -= self.failure_penalty
             print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(3000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
             print("Prior state was RPM:"+str(prev_ob[2])+" . body rate was:"+str(prev_ob[1]))
 
@@ -107,7 +108,7 @@ class leoPowerAttEnv(gym.Env):
         #   If we run out of power, end the episode.
         if ob[3] == 0:
             self.episode_over = True
-            self.reward_total -= 50
+            self.reward_total -= self.failure_penalty
             print("Ran out of power. Battery level at:"+str(ob[3])+", env step"+str(self.curr_step))
 
         if self.sim_over:
