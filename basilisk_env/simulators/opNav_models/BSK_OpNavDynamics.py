@@ -110,11 +110,11 @@ class BSKDynamicModels():
         self.cameraMod.saveDir = 'Test/'
 
         # Noise parameters
-        # self.cameraMod.gaussian = 2
-        # self.cameraMod.darkCurrent = 0
-        # self.cameraMod.saltPepper = 0.5
-        # self.cameraMod.cosmicRays = 1
-        # self.cameraMod.blurParam = 3
+        self.cameraMod.gaussian = 0
+        self.cameraMod.darkCurrent = 0
+        self.cameraMod.saltPepper = 0
+        self.cameraMod.cosmicRays = 0
+        self.cameraMod.blurParam = 0
 
         # Camera config
         self.cameraMod.cameraIsOn = 1
