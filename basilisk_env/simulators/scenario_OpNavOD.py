@@ -25,7 +25,7 @@ class scenario_OpNav(BSKScenario):
         super(scenario_OpNav, self).__init__(masterSim)
         self.name = 'scenario_opnav'
         self.masterSim = masterSim
-        self.filterUse = "bias" #"relOD"
+        self.filterUse = "relOD"
 
     def configure_initial_conditions(self):
         print('%s: configure_initial_conditions' % self.name)

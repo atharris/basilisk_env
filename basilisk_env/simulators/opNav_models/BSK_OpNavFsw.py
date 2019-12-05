@@ -137,8 +137,14 @@ class BSKFswModels():
         SimBase.fswProc.addTask(SimBase.CreateNewTask("attODFaultDet", self.processTasksTimeStep), 9)
         SimBase.fswProc.addTask(SimBase.CreateNewTask("cnnFaultDet", self.processTasksTimeStep), 9)
 
+        SimBase.fswProc.addTask(SimBase.CreateNewTask("sunSafePointTask", self.processTasksTimeStep), 20)
+        SimBase.fswProc.addTask(SimBase.CreateNewTask("mrpSteeringRWsTask", self.processTasksTimeStep), 10)
+
         SimBase.AddModelToTask("hillPointTask", self.hillPointWrap, self.hillPointData, 10)
         SimBase.AddModelToTask("hillPointTask", self.trackingErrorCamWrap, self.trackingErrorCamData, 9)
+
+        SimBase.AddModelToTask("sunSafePointTask", self.sunSafePointWrap, self.sunSafePointData, 10)
+        SimBase.AddModelToTask("sunSafePointTask", self.cssWlsEstWrap, self.cssWlsEstData, 9)
 
         SimBase.AddModelToTask("opNavPointTask", self.imageProcessing, None, 15)
         SimBase.AddModelToTask("opNavPointTask", self.pixelLineWrap, self.pixelLineData, 12)
@@ -221,6 +227,12 @@ class BSKFswModels():
                                ["self.modeRequest == 'standby'"],
                                ["self.fswProc.disableAllTasks()",
                                 ])
+
+        SimBase.createNewEvent("initiateSunSafePoint", self.processTasksTimeStep, True,
+                               ["self.modeRequest == 'sunSafePoint'"],
+                               ["self.fswProc.disableAllTasks()",
+                                "self.enableTask('sunSafePointTask')",
+                                "self.enableTask('mrpFeedbackRWsTask')"])
 
         SimBase.createNewEvent("prepOpNav", self.processTasksTimeStep, True,
                                ["self.modeRequest == 'prepOpNav'"],
@@ -325,6 +337,13 @@ class BSKFswModels():
         self.hillPointData.outputDataName = "att_reference"
         self.hillPointData.inputNavDataName = SimBase.DynModels.SimpleNavObject.outputTransName
         self.hillPointData.inputCelMessName = "mars barycenter_ephemeris_data"
+
+    def SetSunSafePointGuidance(self, SimBase):
+        """Define the sun safe pointing guidance module"""
+        self.sunSafePointData.attGuidanceOutMsgName = "att_guidance"
+        self.sunSafePointData.imuInMsgName = SimBase.DynModels.SimpleNavObject.outputAttName
+        self.sunSafePointData.sunDirectionInMsgName = self.cssWlsEstData.navStateOutMsgName
+        self.sunSafePointData.sHatBdyCmd = [0.0, 0.0, 1.0]
 
     def SetOpNavPointGuidance(self, SimBase):
         self.opNavPointData.attGuidanceOutMsgName = "att_guidance"
@@ -634,6 +653,8 @@ class BSKFswModels():
         self.SetOpNavPointGuidance(SimBase)
         self.SetHeadingUKF()
         self.SetPixelLineFilter()
+
+        self.SetSunSafePointGuidance(SimBase)
 
 
 #BSKFswModels()
