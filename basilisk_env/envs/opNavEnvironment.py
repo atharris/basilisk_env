@@ -10,9 +10,9 @@ from Basilisk.utilities import macros as mc
 from Basilisk.utilities import orbitalMotion as om
 
 
-class leoPowerAttEnv(gym.Env):
+class opNavEnv(gym.Env):
     """
-    Simple attitude/orbit control problem. The spacecraft must decide when to point at the ground (which generates a
+    OpNav scenario. The spacecraft must decide when to point at the ground (which generates a
     reward) versus pointing at the sun (which increases the sim duration).
     """
 
@@ -29,12 +29,12 @@ class leoPowerAttEnv(gym.Env):
         self.reward_total = 0
 
         #   Set up options, constants for this environment
-        self.step_duration = 180.  # Set step duration equal to 1 minute (180min ~ 2 orbits)
+        self.step_duration = 60.  # Set step duration equal to 60 minute
         self.reward_mult = 1.
         low = -1e16
         high = 1e16
-        self.observation_space = spaces.Box(low, high,shape=(5,1))
-        self.obs = np.zeros([5,])
+        self.observation_space = spaces.Box(low, high,shape=(10,1))
+        self.obs = np.zeros([10,])
 
         ##  Action Space description
         #   0 - earth pointing (mission objective)
@@ -83,7 +83,7 @@ class leoPowerAttEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(0.5, 0.5, self.step_duration)
             self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
@@ -150,9 +150,11 @@ class leoPowerAttEnv(gym.Env):
 
         """
         reward = 0
+        estErr = np.array([self.obs[3],self.obs[4], self.obs[5]])
+        estErr = np.array([self.debug_states[0],self.debug_states[1], self.debug_states[2]])
 
-        if self.action_episode_memory[self.curr_episode][-1] == 0:
-            reward = np.linalg.norm(self.reward_mult / (1. + self.obs[0]**2.0))
+        if self.action_episode_memory[self.curr_episode][-1] == 1:
+            reward = np.linalg.norm(self.reward_mult / (1. + np.linalg.norm(estErr)**2.0))
         return reward
 
     def reset(self):

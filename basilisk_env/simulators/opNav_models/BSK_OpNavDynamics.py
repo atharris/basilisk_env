@@ -145,6 +145,7 @@ class BSKDynamicModels():
             os.mkdir(home + '_VizFiles')
         fileName = home + '_VizFiles/' + name
 
+        self.vizInterface.opNavMode = 2
         self.vizInterface.spacecraftName = 'inertial'
         self.vizInterface.opnavImageOutMsgName = "unity_image"#"opnav_image"#
         self.vizInterface.spiceInMsgName = vizInterface.StringVector(["earth_planet_data",
