@@ -72,7 +72,7 @@ class scenario_OpNav(BSKSim):
         self.modeCounter = 0
 
         self.obs = np.zeros([10,1])
-        self.sim_states = np.zeros([6,1])
+        self.sim_states = np.zeros([9,1])
 
         self.set_logging()
         # self.previousPointingGoal = "sunPointTask"
@@ -103,8 +103,8 @@ class scenario_OpNav(BSKSim):
         rN, vN = orbitalMotion.elem2rv(mu, oe)
         orbitalMotion.rv2elem(mu, rN, vN)
 
-        rError = np.array([10000., 10000., -10000])
-        vError = np.array([100, -10, 10])
+        rError = uniform(100000,-100000, 3)
+        vError = uniform(1000,-1000, 3)
         MRP = [0, 0, 0]
         self.get_FswModel().relativeODData.stateInit = (rN + rError).tolist() + (vN + vError).tolist()
         self.get_DynModel().scObject.hub.r_CN_NInit = unitTestSupport.np2EigenVectorXd(rN)  # m   - r_CN_N
@@ -135,7 +135,7 @@ class scenario_OpNav(BSKSim):
 
         #   Log planet, sun positions
         self.TotalSim.logThisMessage(self.get_FswModel().relativeODData.filtDataOutMsgName, samplingTime)
-        self.TotalSim.logThisMessage(self.get_FswModel().imageProcessing.opnavCirclesOutMsgName, samplingTime)
+        self.TotalSim.logThisMessage("eclipse_data_0", samplingTime)
         self.TotalSim.logThisMessage(self.get_DynModel().scObject.scStateOutMsgName, samplingTime)
 
         return
@@ -175,12 +175,12 @@ class scenario_OpNav(BSKSim):
             self.get_DynModel().scObject.scStateOutMsgName + '.r_BN_N',
             self.get_DynModel().scObject.scStateOutMsgName + '.v_BN_N',
             self.get_DynModel().scObject.scStateOutMsgName + '.sigma_BN',
-            self.get_FswModel().imageProcessing.opnavCirclesOutMsgName+ ".valid",
+            "eclipse_data_0" + ".shadowFactor",
             self.get_FswModel().relativeODData.filtDataOutMsgName + ".state",
             self.get_FswModel().relativeODData.filtDataOutMsgName + ".covar"
         ], [list(range(3)), list(range(3)), list(range(3)), list(range(1)), list(range(NUM_STATES)), list(range(NUM_STATES*NUM_STATES))], 1)
 
-        validCircle = simDict[self.get_FswModel().imageProcessing.opnavCirclesOutMsgName + ".valid"]
+        eclipse = simDict["eclipse_data_0" + ".shadowFactor"]
         position_N = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.r_BN_N']
         sigma_BN = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.sigma_BN']
         velocity_N = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.v_BN_N']
@@ -192,7 +192,7 @@ class scenario_OpNav(BSKSim):
         covarVec = np.array([np.sqrt(navCovar[-1,1]), np.sqrt(navCovar[-1,2 + NUM_STATES]), np.sqrt(navCovar[-1,3 + 2*NUM_STATES])])
 
         debug = np.hstack([position_N[-1,1:4], velocity_N[-1,1:4], sigma_BN[-1,1:4]])
-        obs = np.hstack([oe.a, oe.e, oe.f, navState[-1,1:4]/np.linalg.norm(navState[-1,1:4]), covarVec/np.linalg.norm(navState[-1,1:4]), validCircle[-1,1]])
+        obs = np.hstack([oe.a, oe.e, oe.f, navState[-1,1:4]/np.linalg.norm(navState[-1,1:4]), covarVec/np.linalg.norm(navState[-1,1:4]), eclipse[-1,1]])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = debug.reshape(len(debug), 1)
 
@@ -240,11 +240,16 @@ if __name__=="__main__":
     obs = np.asarray(obs)
     states = np.asarray(states)
 
+    try:
+        os.kill(child.pid + 1, signal.SIGKILL)
+    except:
+        print("IDK how to turn this thing off")
+
     plt.figure()
     plt.plot(range(0,tFinal),obs[:,0], label="a")
     plt.plot(range(0,tFinal),obs[:,1], label="e")
     plt.plot(range(0,tFinal),obs[:,2], label="f")
-    plt.plot(range(0,tFinal),obs[:,9], label="val")
+    plt.plot(range(0,tFinal),obs[:,9], label="shadow")
     plt.legend()
 
     plt.figure()
