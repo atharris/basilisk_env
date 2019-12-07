@@ -6,6 +6,7 @@ from Basilisk.utilities import SimulationBaseClass
 from Basilisk.utilities import macros as mc
 from Basilisk.utilities import unitTestSupport
 from Basilisk.utilities import orbitalMotion
+from Basilisk.utilities import RigidBodyKinematics as rbk
 from numpy.random import uniform
 from Basilisk import __path__
 bskPath = __path__[0]
@@ -65,14 +66,14 @@ class scenario_OpNav(BSKSim):
         self.initInterfaces()
         self.filterUse = "relOD"
         self.configure_initial_conditions()
-        self.get_DynModel().vizInterface.opNavMode = 2
+        self.get_DynModel().vizInterface.opNavMode = 1
 
         self.simTime = 0.0
         self.numModes = 50
         self.modeCounter = 0
 
-        self.obs = np.zeros([10,1])
-        self.sim_states = np.zeros([9,1])
+        self.obs = np.zeros([4,1])
+        self.sim_states = np.zeros([12,1])
 
         self.set_logging()
         # self.previousPointingGoal = "sunPointTask"
@@ -135,7 +136,7 @@ class scenario_OpNav(BSKSim):
 
         #   Log planet, sun positions
         self.TotalSim.logThisMessage(self.get_FswModel().relativeODData.filtDataOutMsgName, samplingTime)
-        self.TotalSim.logThisMessage("eclipse_data_0", samplingTime)
+        self.TotalSim.logThisMessage(self.get_DynModel().SimpleNavObject.outputAttName, samplingTime)
         self.TotalSim.logThisMessage(self.get_DynModel().scObject.scStateOutMsgName, samplingTime)
 
         return
@@ -148,19 +149,28 @@ class scenario_OpNav(BSKSim):
         :return:
         '''
 
-        self.modeRequest = str(action)
+        # self.modeRequest = str(action)
 
         self.sim_over = False
         self.modeCounter+=1
 
         currentResetTime = mc.sec2nano(self.simTime)
-        if self.modeRequest == "0":
+        if str(action) == "0":
             self.get_DynModel().cameraMod.cameraIsOn = 1
-            self.modeRequest = 'OpNavOD'
+            # self.modeRequest = 'OpNavOD'
 
-        elif self.modeRequest == "1":
+            self.fswProc.disableAllTasks()
+            self.enableTask('opNavPointTaskCheat')
+            self.enableTask('mrpFeedbackRWsTask')
+            self.enableTask('opNavODTask')
+
+
+        elif str(action) == "1":
             self.get_DynModel().cameraMod.cameraIsOn = 0
-            self.modeRequest = "sunSafePoint"
+            # self.modeRequest = "sunSafePoint"
+            self.fswProc.disableAllTasks()
+            self.enableTask('sunSafePointTask')
+            self.enableTask('mrpFeedbackRWsTask')
 
         self.simTime += self.step_duration
         simulationTime = mc.min2nano(self.simTime)
@@ -175,24 +185,30 @@ class scenario_OpNav(BSKSim):
             self.get_DynModel().scObject.scStateOutMsgName + '.r_BN_N',
             self.get_DynModel().scObject.scStateOutMsgName + '.v_BN_N',
             self.get_DynModel().scObject.scStateOutMsgName + '.sigma_BN',
-            "eclipse_data_0" + ".shadowFactor",
+            self.get_DynModel().SimpleNavObject.outputAttName + '.vehSunPntBdy',
             self.get_FswModel().relativeODData.filtDataOutMsgName + ".state",
             self.get_FswModel().relativeODData.filtDataOutMsgName + ".covar"
-        ], [list(range(3)), list(range(3)), list(range(3)), list(range(1)), list(range(NUM_STATES)), list(range(NUM_STATES*NUM_STATES))], 1)
+        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(NUM_STATES)), list(range(NUM_STATES*NUM_STATES))], 1)
 
-        eclipse = simDict["eclipse_data_0" + ".shadowFactor"]
+        # sunHead = simDict["sun_planet_data" + ".PositionVector"]
+        sunHead_B = simDict[self.get_DynModel().SimpleNavObject.outputAttName + '.vehSunPntBdy']
         position_N = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.r_BN_N']
         sigma_BN = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.sigma_BN']
         velocity_N = simDict[self.get_DynModel().scObject.scStateOutMsgName + '.v_BN_N']
         navState = simDict[self.get_FswModel().relativeODData.filtDataOutMsgName + ".state"]
         navCovar = simDict[self.get_FswModel().relativeODData.filtDataOutMsgName + ".covar"]
 
-        mu = self.get_DynModel().marsGravBody.mu
-        oe = orbitalMotion.rv2elem_parab(mu, navState[-1,1:4], navState[-1,4:7])
+        # mu = self.get_DynModel().marsGravBody.mu
+        # oe = orbitalMotion.rv2elem_parab(mu, navState[-1,1:4], navState[-1,4:7])
         covarVec = np.array([np.sqrt(navCovar[-1,1]), np.sqrt(navCovar[-1,2 + NUM_STATES]), np.sqrt(navCovar[-1,3 + 2*NUM_STATES])])
 
-        debug = np.hstack([position_N[-1,1:4], velocity_N[-1,1:4], sigma_BN[-1,1:4]])
-        obs = np.hstack([oe.a, oe.e, oe.f, navState[-1,1:4]/np.linalg.norm(navState[-1,1:4]), covarVec/np.linalg.norm(navState[-1,1:4]), eclipse[-1,1]])
+        BN = rbk.MRP2C(sigma_BN[-1,1:4])
+        pos_B = -np.dot(BN, navState[-1,1:4]/np.linalg.norm(navState[-1,1:4]))
+        sunHeadNorm = sunHead_B[-1,1:4]/np.linalg.norm(sunHead_B[-1,1:4])
+        sunMarsAngle = np.dot(pos_B, sunHeadNorm)
+
+        debug = np.hstack([navState[-1,1:4], position_N[-1,1:4], velocity_N[-1,1:4], sigma_BN[-1,1:4]])
+        obs = np.hstack([sunMarsAngle, covarVec/np.linalg.norm(navState[-1,1:4])])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = debug.reshape(len(debug), 1)
 
@@ -206,11 +222,14 @@ class scenario_OpNav(BSKSim):
         makes sure spice gets shut down right when we close.
         :return:
         """
-        self.gravFactory.unloadSpiceKernels()
+        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de430.bsp')
+        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'naif0012.tls')
+        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de-403-masses.tpc')
+        self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'pck00010.tpc')
         return
 
 def create_scenario_OpNav():
-    return scenario_OpNav(0.5, 0.5, 60.)
+    return scenario_OpNav(1., 5., 50.)
 
 if __name__=="__main__":
     """
@@ -218,10 +237,10 @@ if __name__=="__main__":
     """
 
     appPath = '/Applications/OpNavScene.app'
-    # appPath = '/Applications/Vizard.app'
+    appPath = '/Applications/Vizard.app'
     child = subprocess.Popen(["open", appPath, "--args", "-opNavMode", "tcp://localhost:5556"])  # ,, "-batchmode"
 
-    sim = scenario_OpNav(0.5, 0.5, 60.)
+    sim = scenario_OpNav(1., 5., 50.)
     obs = []
     states = []
     normWheelSpeed = []
@@ -231,10 +250,10 @@ if __name__=="__main__":
 
     tFinal = 5
     for ind in range(0,tFinal):
-        act = randrange(2)
+        act = (ind-1)%2 #randrange(2)
+        print("act = ",act)
         actList.append(act)
         ob, state, _ = sim.run_sim(act)
-        #normWheelSpeed.append(np.linalg.norm(abs(ob[3:6])))
         obs.append(ob)
         states.append(state)
     obs = np.asarray(obs)
@@ -246,32 +265,28 @@ if __name__=="__main__":
         print("IDK how to turn this thing off")
 
     plt.figure()
-    plt.plot(range(0,tFinal),obs[:,0], label="a")
-    plt.plot(range(0,tFinal),obs[:,1], label="e")
-    plt.plot(range(0,tFinal),obs[:,2], label="f")
-    plt.plot(range(0,tFinal),obs[:,9], label="shadow")
+    plt.plot(range(0,tFinal),obs[:,0], label="angle")
+    plt.plot(range(0,tFinal),obs[:,1], label="cov1")
+    plt.plot(range(0,tFinal),obs[:,2], label="cov2")
+    plt.plot(range(0,tFinal),obs[:,3], label="cov3")
     plt.legend()
 
     plt.figure()
-    plt.plot(range(0,tFinal),obs[:,3], label="pos1")
-    plt.plot(range(0,tFinal),obs[:,4], label="pos2")
-    plt.plot(range(0,tFinal),obs[:,5], label="pos3")
-    plt.plot(range(0,tFinal),obs[:,6], label="cov1")
-    plt.plot(range(0,tFinal),obs[:,7], label="cov2")
-    plt.plot(range(0,tFinal),obs[:,8], label="cov3")
+    plt.plot(range(0,tFinal),states[:,0], label="nav1")
+    plt.plot(range(0,tFinal),states[:,1], label="nav2")
+    plt.plot(range(0,tFinal),states[:,2], label="nav3")
+    plt.plot(range(0,tFinal),states[:,3], label="pos1")
+    plt.plot(range(0,tFinal),states[:,4], label="pos2")
+    plt.plot(range(0,tFinal),states[:,5], label="pos3")
     plt.legend()
 
 
     plt.figure()
-    plt.plot(range(0,tFinal),states[:,6], label="sigma1")
-    plt.plot(range(0,tFinal),states[:,7], label="sigma2")
-    plt.plot(range(0,tFinal),states[:,8], label="sigma3")
+    plt.plot(range(0,tFinal),states[:,9], label="sigma1")
+    plt.plot(range(0,tFinal),states[:,10], label="sigma2")
+    plt.plot(range(0,tFinal),states[:,11], label="sigma3")
     plt.legend()
 
-    plt.figure()
-    plt.plot(states[:, 3]/1000., states[:, 4]/1000., label="Orbit")
-    #plt.plot(states[:,12]/1000., states[:,13]/1000, label="Sun Position")
-    plt.legend()
 
     plt.show()
 

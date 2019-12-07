@@ -30,9 +30,9 @@ class opNavEnv(gym.Env):
         self.reward_mult = 1.
         low = -1e16
         high = 1e16
-        self.observation_space = spaces.Box(low, high,shape=(10,1))
-        self.obs = np.zeros([10,])
-        self.debug_states = np.zeros([9,])
+        self.observation_space = spaces.Box(low, high,shape=(4,1))
+        self.obs = np.zeros([4,])
+        self.debug_states = np.zeros([12,])
 
         ##  Action Space description
         #   0 - earth pointing (mission objective)
@@ -134,12 +134,13 @@ class opNavEnv(gym.Env):
 
         """
         reward = 0
-        estErr = np.array([self.obs[3],self.obs[4], self.obs[5]])
-        real = np.array([self.debug_states[0],self.debug_states[1], self.debug_states[2]])
-        estErr -= real
+        real = np.array([self.debug_states[3],self.debug_states[4], self.debug_states[5]])
+        nav = np.array([self.debug_states[0],self.debug_states[1], self.debug_states[2]])
+        nav -= real
+        nav *= 1./np.linalg.norm(real)
 
         if self.action_episode_memory[self.curr_episode][-1] == 1:
-            reward = np.linalg.norm(self.reward_mult / (1. + np.linalg.norm(estErr)**2.0))
+            reward = np.linalg.norm(self.reward_mult / (1. + np.linalg.norm(nav)**2.0))
         return reward
 
     def reset(self):

@@ -145,6 +145,7 @@ class BSKDynamicModels():
             os.mkdir(home + '_VizFiles')
         fileName = home + '_VizFiles/' + name
 
+        self.vizInterface.saveFile = False
         self.vizInterface.opNavMode = 2
         self.vizInterface.spacecraftName = 'inertial'
         self.vizInterface.opnavImageOutMsgName = "unity_image"#"opnav_image"#
@@ -159,7 +160,7 @@ class BSKDynamicModels():
         # self.vizInterface.spiceInMsgName = vizInterface.StringVector(["mars barycenter_planet_data"])
         # self.vizInterface.planetNames = vizInterface.StringVector(["mars barycenter"])
         # vizMessager.numRW = 4
-        self.vizInterface.protoFilename = fileName
+        # self.vizInterface.protoFilename = fileName
 
     def SetSpacecraftHub(self):
         self.scObject.ModelTag = "spacecraftBody"
