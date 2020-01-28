@@ -63,7 +63,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
     :return:
     '''
-    def __init__(self, dynRate, fswRate, step_duration):
+    def __init__(self, dynRate, fswRate, step_duration, mass=330.,powerDraw=-5.):
         '''
         Creates the simulation, but does not initialize the initial conditions.
         '''
@@ -75,6 +75,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.TotalSim.terminateSimulation()
 
         self.simTime = 0.0
+
+        #   Specify some simulation parameters
+
+        self.mass = mass #kg
+        self.powerDraw = powerDraw #  W
 
         self.DynModels = []
         self.FSWModels = []
@@ -152,12 +157,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         width = 1.38
         depth = 1.04
         height = 1.58
-        mass = 330.
-        I = [1./12.*mass*(width**2. + depth**2.), 0., 0.,
-             0., 1./12.*mass*(depth**2. + height**2.), 0.,
-             0., 0.,1./12.*mass*(width**2. + height**2.)]
+        I = [1./12.*self.mass*(width**2. + depth**2.), 0., 0.,
+             0., 1./12.*self.mass*(depth**2. + height**2.), 0.,
+             0., 0.,1./12.*self.mass*(width**2. + height**2.)]
 
-        self.scObject.hub.mHub = mass # kg
+        self.scObject.hub.mHub = self.mass # kg
         self.scObject.hub.IHubPntBc_B = unitTestSupport.np2EigenMatrix3d(I)
 
         self.scObject.hub.r_CN_NInit = unitTestSupport.np2EigenVectorXd(rN)
@@ -237,7 +241,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.powerSink = simplePowerSink.SimplePowerSink()
         self.powerSink.ModelTag = "powerSink" + str(sc_number)
-        self.powerSink.nodePowerOut = -5.  # Watts
+        self.powerSink.nodePowerOut = self.powerDraw  # Watts
         self.powerSink.nodePowerOutMsgName = "powerSinkMsg" + str(sc_number)
 
         self.powerMonitor = simpleBattery.SimpleBattery()

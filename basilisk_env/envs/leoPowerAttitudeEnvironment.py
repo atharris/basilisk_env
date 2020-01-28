@@ -28,10 +28,14 @@ class leoPowerAttEnv(gym.Env):
         self.simulator = None
         self.reward_total = 0
 
+        #   Set some attributes for the simulator; parameterized such that they can be varied in-sim
+        self.mass = 330.0 # kg
+        self.powerDraw = -5. #  W
+
         #   Set up options, constants for this environment
         self.step_duration = 180.  # Set step duration equal to 1 minute (180min ~ 2 orbits)
         self.reward_mult = 1.
-        self.failure_penalty = -50
+        self.failure_penalty = 1000 #    Default is 50.
         low = -1e16
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(5,1))
@@ -84,7 +88,7 @@ class leoPowerAttEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw = self.powerDraw)
             self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
@@ -100,6 +104,7 @@ class leoPowerAttEnv(gym.Env):
         #   If the wheel speeds get too large, end the episode.
         if ob[2] > 3000*mc.RPM:
             self.episode_over = True
+            reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
             print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(3000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
             print("Prior state was RPM:"+str(prev_ob[2])+" . body rate was:"+str(prev_ob[1]))
@@ -108,6 +113,7 @@ class leoPowerAttEnv(gym.Env):
         #   If we run out of power, end the episode.
         if ob[3] == 0:
             self.episode_over = True
+            reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
             print("Ran out of power. Battery level at:"+str(ob[3])+", env step"+str(self.curr_step))
 
@@ -169,7 +175,7 @@ class leoPowerAttEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
 
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw=self.powerDraw)
         self.simulator_init = 1
         self.seed()
 
