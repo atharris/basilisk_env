@@ -63,7 +63,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
     :return:
     '''
-    def __init__(self, dynRate, fswRate, step_duration, mass=330.,powerDraw=-5.):
+    def __init__(self, dynRate, fswRate, step_duration, mass=5.,powerDraw=-5.):
         '''
         Creates the simulation, but does not initialize the initial conditions.
         '''
@@ -150,13 +150,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.gravField.gravBodies = spacecraftPlus.GravBodyVector(list(self.gravFactory.gravBodies.values()))
 
         oe, rN,vN = leo_orbit.sampled_400km() # Pick a random orbit in LEO with an SMA of 400km
-
         n = np.sqrt(mu / oe.a / oe.a / oe.a)
-        P = 2. * np.pi / n
 
-        width = 1.38
-        depth = 1.04
-        height = 1.58
+        width = 0.2 # m
+        depth = 0.3 # m
+        height = 0.1 # m
         I = [1./12.*self.mass*(width**2. + depth**2.), 0., 0.,
              0., 1./12.*self.mass*(depth**2. + height**2.), 0.,
              0., 0.,1./12.*self.mass*(width**2. + height**2.)]
@@ -183,15 +181,14 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.densityModel.scaleHeight = 8e3 #   m
 
         self.dragEffector = facetDragDynamicEffector.FacetDragDynamicEffector()
+
         #   Set up the goemetry of a 6U cubesat
         self.dragEffector.addFacet(0.2*0.3, 2.2, [1,0,0], [0.05, 0.0, 0])
-        self.dragEffector.addFacet(0.2*0.3, 2.2, [-1,0,0], [0.05, 0.0, 0])
+        self.dragEffector.addFacet(0.2*0.3, 2.2, [-1,0,0], [-0.05, 0.0, 0])
         self.dragEffector.addFacet(0.1*0.2, 2.2, [0,1,0], [0, 0.15, 0])
         self.dragEffector.addFacet(0.1*0.2, 2.2, [0,-1,0], [0, -0.15, 0])
         self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,1], [0,0, 0.1])
         self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,-1], [0, 0, -0.1])
-        self.dragEffector.addFacet(1.*2., 2.2, [0,1,0],[0,2.,0])
-        self.dragEffector.addFacet(1.*2., 2.2, [0,-1,0],[0,2.,0])
 
         self.dragEffector.atmoDensInMsgName = self.densityModel.envOutMsgNames[-1]
         self.scObject.addDynamicEffector(self.dragEffector)
@@ -201,7 +198,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.eclipseObject.addPlanetName('earth')
 
         #   Disturbance Torque Setup
-        disturbance_magnitude = 2e-4
+        disturbance_magnitude = 1E-6
         disturbance_vector = np.random.standard_normal(3)
         unit_disturbance = disturbance_vector/np.linalg.norm(disturbance_vector)
         self.extForceTorqueObject = extForceTorque.ExtForceTorque()
@@ -211,7 +208,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
-        self.rwStateEffector, rwFactory, initWheelSpeeds = ap.balancedHR16Triad(useRandom=True,randomBounds=(-800,800))
+        self.rwStateEffector, rwFactory, initWheelSpeeds = ap.balancedBCTRWP015Triad(useRandom=True,randomBounds=(-800,800))
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
@@ -297,13 +294,13 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         vehicleConfigOut = fswMessages.VehicleConfigFswMsg()
         # use the same inertia in the FSW algorithm as in the simulation
         #   Set inertia properties to those of a solid 6U cubeoid:
-        width = 1.38
-        depth = 1.04
-        height = 1.58
-        mass = 330.
-        I = [1. / 12. * mass * (width ** 2. + depth ** 2.), 0., 0.,
-             0., 1. / 12. * mass * (depth ** 2. + height ** 2.), 0.,
-             0., 0., 1. / 12. * mass * (width ** 2. + height ** 2.)]
+
+        width = 0.2 # m
+        depth = 0.3 # m
+        height = 0.1 # m
+        I = [1./12.*self.mass*(width**2. + depth**2.), 0., 0.,
+             0., 1./12.*self.mass*(depth**2. + height**2.), 0.,
+             0., 0.,1./12.*self.mass*(width**2. + height**2.)]
 
         vehicleConfigOut.ISCPntB_B = I
         unitTestSupport.setMessage(self.TotalSim,
@@ -560,7 +557,7 @@ if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-    sim = LEOPowerAttitudeSimulator(0.1,1.0, 60.)
+    sim = LEOPowerAttitudeSimulator(0.01,0.1, 60.)
     obs = []
     states = []
     normWheelSpeed = []
@@ -583,7 +580,7 @@ if __name__=="__main__":
     plt.plot(range(0,tFinal),obs[:,0], label="sigma_BR")
     plt.plot(range(0,tFinal),obs[:,1], label="omega_BN")
     plt.plot(range(0,tFinal),obs[:,2], label="omega_rw")
-    plt.plot(range(0,tFinal), obs[:,3], label= "J_bat")
+    plt.plot(range(0,tFinal),obs[:,3], label= "J_bat")
     plt.plot(range(0,tFinal),obs[:,4], label="eclipse_ind")
     plt.legend()
 
