@@ -8,6 +8,7 @@ from Basilisk.utilities import unitTestSupport
 from Basilisk.utilities import orbitalMotion
 from Basilisk.utilities import RigidBodyKinematics as rbk
 from numpy.random import uniform
+import matplotlib as mpl
 from Basilisk import __path__
 bskPath = __path__[0]
 # Get current file path
@@ -17,6 +18,16 @@ path = os.path.dirname(os.path.abspath(filename))
 sys.path.append(path + '/opNav_models')
 from BSK_masters import BSKSim, BSKScenario
 import BSK_OpNavDynamics, BSK_OpNavFsw
+
+mpl.rcParams.update({'font.size' : 8 })
+#seaborn-colorblind, 'seaborn-paper', 'bmh', 'tableau-colorblind10', 'seaborn-deep', 'myStyle', 'aiaa'
+
+try:
+    plt.style.use("myStyle")
+except:
+    pass
+params = {'axes.labelsize': 8,'axes.titlesize':8, 'legend.fontsize': 8, 'xtick.labelsize': 7, 'ytick.labelsize': 7, 'text.usetex': True}
+mpl.rcParams.update(params)
 
 class scenario_OpNav(BSKSim):
     '''
@@ -68,6 +79,11 @@ class scenario_OpNav(BSKSim):
         self.configure_initial_conditions()
         self.get_DynModel().vizInterface.opNavMode = 1
 
+        # appPath = '/Applications/OpNavScene.app'  # in mode 2 to train
+        # # appPath = '/Applications/Vizard.app' #in mode 1 to see it
+        # self.child = subprocess.Popen(["open", appPath, "--args", "-opNavMode", "tcp://localhost:5556"])  # ,, "-batchmode"
+        # print("Spawning Vizard")
+
         self.simTime = 0.0
         self.numModes = 50
         self.modeCounter = 0
@@ -86,23 +102,27 @@ class scenario_OpNav(BSKSim):
     def configure_initial_conditions(self):
         # Configure Dynamics initial conditions
         oe = orbitalMotion.ClassicElements()
-        oe.a = uniform(17000 * 1E3, 22000 * 1E3, 1)
-        oe.e = uniform(0, 0.6, 1)
-        oe.i = uniform(-20 * mc.D2R, 20 * mc.D2R, 1)
-        oe.Omega = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
-        oe.omega = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
-        oe.f = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
+        # oe.a = uniform(17000 * 1E3, 22000 * 1E3, 1)
+        # oe.e = uniform(0, 0.6, 1)
+        # oe.i = uniform(-20 * mc.D2R, 20 * mc.D2R, 1)
+        # oe.Omega = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
+        # oe.omega = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
+        # oe.f = uniform(0 * mc.D2R, 360 * mc.D2R, 1)
 
-        # oe.a = 18000 * 1E3  # meters
-        # oe.e = 0.6
-        # oe.i = 10 * mc.D2R
-        # oe.Omega = 25. * mc.D2R
-        # oe.omega = 190. * mc.D2R
-        # oe.f = 80. * mc.D2R  # 90 good
+        oe.a = 18000 * 1E3  # meters
+        oe.e = 0.6
+        oe.i = 10 * mc.D2R
+        oe.Omega = 25. * mc.D2R
+        oe.omega = 190. * mc.D2R
+        oe.f = 80. * mc.D2R  # 90 good
         mu = self.get_DynModel().marsGravBody.mu
 
         rN, vN = orbitalMotion.elem2rv(mu, oe)
         orbitalMotion.rv2elem(mu, rN, vN)
+
+        print("ICs \n")
+        print(rN , "\n")
+        print(vN , "\n")
 
         rError = uniform(100000,-100000, 3)
         vError = uniform(1000,-1000, 3)
@@ -156,7 +176,7 @@ class scenario_OpNav(BSKSim):
 
         currentResetTime = mc.sec2nano(self.simTime)
         if str(action) == "0":
-            self.get_DynModel().cameraMod.cameraIsOn = 1
+            # self.get_DynModel().cameraMod.cameraIsOn = 1
             # self.modeRequest = 'OpNavOD'
 
             self.fswProc.disableAllTasks()
@@ -226,6 +246,12 @@ class scenario_OpNav(BSKSim):
         self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'naif0012.tls')
         self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de-403-masses.tpc')
         self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'pck00010.tpc')
+
+        # try:
+        #     os.kill(self.child.pid + 1, signal.SIGKILL)
+        #     print("Closing Vizard")
+        # except:
+        #     print("IDK how to turn this thing off")
         return
 
 def create_scenario_OpNav():
@@ -236,56 +262,137 @@ if __name__=="__main__":
     Test execution of the simulator with random actions and plot the observation space.
     """
 
-    appPath = '/Applications/OpNavScene.app'
+    # appPath = '/Applications/OpNavScene.app'
     appPath = '/Applications/Vizard.app'
     child = subprocess.Popen(["open", appPath, "--args", "-opNavMode", "tcp://localhost:5556"])  # ,, "-batchmode"
 
-    sim = scenario_OpNav(1., 5., 50.)
+    actHist = [1, 1, 0, 0, 1, 1, 1, 0, 0, 1]
+    sim = scenario_OpNav(0.5, 5., 50.)
     obs = []
     states = []
+    rewardList = []
     normWheelSpeed = []
     actList = []
     from matplotlib import pyplot as plt
     from random import randrange
 
-    tFinal = 5
-    for ind in range(0,tFinal):
-        act = (ind-1)%2 #randrange(2)
+    tFinal = len(actHist)
+    rewardList.append(np.nan)
+    for ind in range(0,len(actHist)):
+        act = actHist[ind]#(ind-1)%2 #randrange(2)
         print("act = ",act)
         actList.append(act)
         ob, state, _ = sim.run_sim(act)
+        reward = 0
+        if act == 1:
+            real = np.array([state[3],state[4], state[5]])
+            nav = np.array([state[0],state[1], state[2]])
+            nav -= real
+            nav *= 1./np.linalg.norm(real)
+            reward = np.linalg.norm(1./ (1. + np.linalg.norm(nav)**2.0))
+        rewardList.append(reward)
+
         obs.append(ob)
         states.append(state)
     obs = np.asarray(obs)
     states = np.asarray(states)
 
-    try:
-        os.kill(child.pid + 1, signal.SIGKILL)
-    except:
-        print("IDK how to turn this thing off")
-
-    plt.figure()
-    plt.plot(range(0,tFinal),obs[:,0], label="angle")
-    plt.plot(range(0,tFinal),obs[:,1], label="cov1")
-    plt.plot(range(0,tFinal),obs[:,2], label="cov2")
-    plt.plot(range(0,tFinal),obs[:,3], label="cov3")
-    plt.legend()
-
-    plt.figure()
-    plt.plot(range(0,tFinal),states[:,0], label="nav1")
-    plt.plot(range(0,tFinal),states[:,1], label="nav2")
-    plt.plot(range(0,tFinal),states[:,2], label="nav3")
-    plt.plot(range(0,tFinal),states[:,3], label="pos1")
-    plt.plot(range(0,tFinal),states[:,4], label="pos2")
-    plt.plot(range(0,tFinal),states[:,5], label="pos3")
-    plt.legend()
+    # try:
+    #     os.kill(child.pid + 1, signal.SIGKILL)
+    # except:
+    #     print("IDK how to turn this thing off")
 
 
-    plt.figure()
-    plt.plot(range(0,tFinal),states[:,9], label="sigma1")
-    plt.plot(range(0,tFinal),states[:,10], label="sigma2")
-    plt.plot(range(0,tFinal),states[:,11], label="sigma3")
-    plt.legend()
+    """Check results here"""
+    colorsInt = len(mpl.cm.get_cmap("inferno").colors)/(10)
+    colorList = []
+    for i in range(10):
+        colorList.append(mpl.cm.get_cmap("inferno").colors[int(i*colorsInt)])
+
+    totalReward = [0]
+    for ind in range(1, tFinal+1):
+        totalReward.append(totalReward[-1] + rewardList[ind])
+
+    plt.figure(num=22, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
+    plt.plot(rewardList, label='Mode-wise Reward', color=colorList[3])
+    plt.plot(totalReward, label='Summed Reward', color=colorList[7])
+    ax = plt.gca()
+    for ind in range(0, tFinal):
+        if actHist[ind] == 0:
+            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
+        if actHist[ind] == 1:
+            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
+    plt.ylabel('Reward')
+    plt.xlabel('Modes (-)')
+    plt.legend(loc='best')
+    plt.tight_layout()
+    plt.savefig('OpNav_Reward_History.pdf')
+
+    nav = np.zeros(len(states[:,0]))
+    covar = np.zeros(len(states[:,0]))
+
+    nav1 = np.copy(states[:,0])
+    nav1 -= states[:,3]
+    nav2 = np.copy(states[:, 1])
+    nav2 -= states[:, 4]
+    nav3 = np.copy(states[:, 2])
+    nav3 -= states[:, 5]
+
+    for i in range(len(states[:,0])):
+        nav[i] = np.linalg.norm(np.array([nav1[i],nav2[i],nav3[i]]))/ np.linalg.norm(np.array([nav1[0],nav2[0],nav3[0]]))
+        covar[i] = np.linalg.norm(np.array([obs[i, 1],obs[i, 2],obs[i, 3]]))/np.linalg.norm(np.array([obs[0, 1],obs[0, 2],obs[0, 3]]))
+
+    plt.figure(num=1, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
+    plt.plot(range(1,tFinal+1), nav, label="$\hat{\mathbf{r}}$", color = colorList[3])
+    plt.plot(range(1,tFinal+1), covar, label="$\hat{\mathrm{P}}$", color = colorList[8])
+    ax = plt.gca()
+    for ind in range(0, tFinal):
+        if actHist[ind] == 0:
+            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
+        if actHist[ind] == 1:
+            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
+    plt.legend(loc='best')
+    plt.ylabel('Normalized States')
+    plt.xlabel('Modes (-)')
+    plt.savefig('ActionsNav.pdf')
+
+    plt.figure(num=11, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
+    plt.plot(range(1,tFinal+1),obs[:,0], label="Angle")
+    plt.plot(range(1,tFinal+1),covar, label="$\hat{\mathrm{P}}$")
+    ax = plt.gca()
+    for ind in range(0, tFinal):
+        if actHist[ind] == 0:
+            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
+        if actHist[ind] == 1:
+            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
+    plt.legend(loc='best')
+    plt.ylabel('Eclipse Angle vs Covar')
+    plt.xlabel('Modes (-)')
+    plt.savefig('AngleCovar.pdf')
+    # plt.figure()
+    # plt.plot(range(0,tFinal),nav1, label="nav1", color = 'r')
+    # plt.plot(range(0,tFinal), nav2, label="nav2", color = 'g')
+    # plt.plot(range(0,tFinal),nav3, label="nav3", color = 'b')
+    # plt.plot(range(0, tFinal), obs[:, 1], label="cov1", color = 'r')
+    # plt.plot(range(0, tFinal), obs[:, 2], label="cov2", color = 'g')
+    # plt.plot(range(0, tFinal), obs[:, 3], label="cov3", color = 'b')
+    # plt.legend()
+
+
+    plt.figure(num=2, figsize=(2.7, 1.6), facecolor='w', edgecolor='k')
+    plt.plot(range(1,tFinal+1),states[:,9], label="$\sigma_1$",  color = colorList[5])
+    plt.plot(range(1,tFinal+1),states[:,10], label="$\sigma_2$", color = colorList[6])
+    plt.plot(range(1,tFinal+1),states[:,11], label="$\sigma_3$", color = colorList[7])
+    ax = plt.gca()
+    for ind in range(0, tFinal):
+        if actHist[ind] == 0:
+            ax.axvspan(ind, ind + 1, color=colorList[1], alpha=0.05)
+        if actHist[ind] == 1:
+            ax.axvspan(ind, ind + 1, color=colorList[8], alpha=0.05)
+    plt.legend(loc='best')
+    plt.ylabel('Attitude')
+    plt.xlabel('Modes (-)')
+    plt.savefig('AttModes.pdf')
 
 
     plt.show()

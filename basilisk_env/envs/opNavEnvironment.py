@@ -18,7 +18,7 @@ class opNavEnv(gym.Env):
         print("Basilisk OpNav Mode Management Sim - Version {}".format(self.__version__))
 
         # General variables defining the environment
-        self.max_length =int(50) # Specify the maximum number of planning intervals
+        self.max_length =int(40) # Specify the maximum number of planning intervals
 
         #   Tell the environment that it doesn't have a sim attribute...
         self.sim_init = 0
@@ -26,7 +26,7 @@ class opNavEnv(gym.Env):
         self.reward_total = 0
 
         #   Set up options, constants for this environment
-        self.step_duration = 60.  # Set step duration equal to 60 minute
+        self.step_duration = 50.  # Set step duration equal to 60 minute
         self.reward_mult = 1.
         low = -1e16
         high = 1e16
@@ -81,8 +81,11 @@ class opNavEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = opNavSimulator.scenario_OpNav(0.5, 0.5, self.step_duration)
+            self.simulator = opNavSimulator.scenario_OpNav(1., 1., self.step_duration)
             self.simulator_init = 1
+
+        if self.curr_step%10 == 0:
+            print("At step ", self.curr_step, " of ", self.max_length)
 
         if self.curr_step >= self.max_length:
             self.episode_over = True
@@ -156,7 +159,7 @@ class opNavEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
 
-        self.simulator = opNavSimulator.scenario_OpNav(0.5, 0.5, self.step_duration)
+        self.simulator = opNavSimulator.scenario_OpNav(1., 1., self.step_duration)
         self.simulator_init = 1
         self.seed()
 
