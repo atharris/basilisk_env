@@ -4,6 +4,57 @@ from Basilisk.utilities import fswSetupThrusters, fswSetupRW
 from Basilisk.utilities import macros as mc
 from numpy.random import uniform
 
+def balancedBCTRWP015Triad(useRandom = False, randomBounds = (-400,400)):
+    """
+        Creates a set of three BCT RWP015 reaction wheels, suitable for a cubesat.
+
+        @return wheelSet: reaction wheel dynamic effector instance
+        @return wheelFac: factory containing defined reaction wheels
+    """
+    rwFactory = simIncludeRW.rwFactory()
+    varRWModel = rwFactory.BalancedWheels
+    wheel_name = 'BCT_RWP015'
+    if useRandom:
+        wheelSpeeds = uniform(randomBounds[0],randomBounds[1],3)
+        RW1 = rwFactory.create(wheel_name
+                              , [1, 0, 0]
+                              , Omega=wheelSpeeds[0]  # RPM
+                              , RWModel=varRWModel
+                              )
+        RW2 = rwFactory.create(wheel_name
+                               , [0, 1, 0]
+                               , maxMomentum=50.
+                               , Omega=wheelSpeeds[1]  # RPM
+                               , RWModel=varRWModel
+                               )
+        RW3 = rwFactory.create(wheel_name
+                               , [0, 0, 1]
+                               , maxMomentum=50.
+                               , Omega=wheelSpeeds[2] # RPM
+                               , RWModel=varRWModel
+                               )
+    else:
+        RW1 = rwFactory.create(wheel_name
+                               , [1, 0, 0]
+                               , Omega=500.  # RPM
+                               , RWModel=varRWModel
+                               )
+        RW2 = rwFactory.create(wheel_name
+                               , [0, 1, 0]
+                               , Omega=500.  # RPM
+                               , RWModel=varRWModel
+                               )
+        RW3 = rwFactory.create(wheel_name
+                               , [0, 0, 1]
+                               , Omega=500.  # RPM
+                               , RWModel=varRWModel
+                               )
+        wheelSpeeds = [500,500,500]
+    numRW = rwFactory.getNumOfDevices()
+    rwStateEffector = reactionWheelStateEffector.ReactionWheelStateEffector()
+
+    return rwStateEffector, rwFactory, wheelSpeeds*mc.RPM
+
 def balancedHR16Triad(useRandom = False, randomBounds = (-400,400)):
     """
         Creates a set of eight ADCS thrusters using MOOG Monarc-1 attributes.
@@ -17,7 +68,7 @@ def balancedHR16Triad(useRandom = False, randomBounds = (-400,400)):
 
         wheelSpeeds = uniform(randomBounds[0],randomBounds[1],3)
 
-        W1 = rwFactory.create('Honeywell_HR16'
+        RW1 = rwFactory.create('Honeywell_HR16'
                               , [1, 0, 0]
                               , maxMomentum=50.
                               , Omega=wheelSpeeds[0]  # RPM
