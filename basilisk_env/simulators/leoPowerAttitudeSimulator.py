@@ -15,7 +15,7 @@ from Basilisk.simulation import simMessages
 from Basilisk.utilities import simIncludeRW, simIncludeGravBody, simIncludeThruster
 from Basilisk.utilities import RigidBodyKinematics as rbk
 from Basilisk.utilities import simulationArchTypes
-from Basilisk.simulation import simpleBattery, simplePowerSink, simpleSolarPanel
+from Basilisk.simulation import simpleBattery, simplePowerSink, simpleSolarPanel, ReactionWheelPower
 from Basilisk import __path__
 bskPath = __path__[0]
 
@@ -210,6 +210,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         # Add reaction wheels to the spacecraft
         self.rwStateEffector, rwFactory, initWheelSpeeds = ap.balancedBCTRWP015Triad(useRandom=True,randomBounds=(-800,800))
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
+        self.rwStateEffector.ModelTag = self.scObject.ModelTag
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
         unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.rwConfigMsgName, rwFactory.getConfigMessage(), msgStrName="RWArrayConfigFswMsg")
@@ -241,6 +242,17 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.powerSink.nodePowerOut = self.powerDraw  # Watts
         self.powerSink.nodePowerOutMsgName = "powerSinkMsg" + str(sc_number)
 
+        self.rwPowerList = []
+        for c in range(0, 3):
+            powerRW = ReactionWheelPower.ReactionWheelPower()
+            powerRW.ModelTag = self.scObject.ModelTag
+            powerRW.basePowerNeed = 0.4  # baseline power draw, Watts
+            powerRW.rwStateInMsgName = self.rwStateEffector.ModelTag + "_rw_config_" + str(c) + "_data"
+            powerRW.nodePowerOutMsgName = "rwPower_" + str(c)
+            powerRW.mechToElecEfficiency = 0.5
+            self.AddModelToTask(self.dynTaskName, powerRW)
+            self.rwPowerList.append(powerRW)
+
         self.powerMonitor = simpleBattery.SimpleBattery()
         self.powerMonitor.ModelTag = "powerMonitor"
         self.powerMonitor.batPowerOutMsgName = "powerMonitorMsg"
@@ -248,6 +260,8 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.powerMonitor.storedCharge_Init = np.random.uniform(8.*3600., 20.*3600., 1)[0]
         self.powerMonitor.addPowerNodeToModel(self.solarPanel.nodePowerOutMsgName)
         self.powerMonitor.addPowerNodeToModel(self.powerSink.nodePowerOutMsgName)
+        for powerRW in self.rwPowerList:
+            self.powerMonitor.addPowerNodeToModel(powerRW.nodePowerOutMsgName)
 
         self.sim_states[9,0] = self.powerMonitor.storedCharge_Init
         self.obs[0,0] = np.linalg.norm(self.scObject.hub.sigma_BNInit)
@@ -557,7 +571,7 @@ if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-    sim = LEOPowerAttitudeSimulator(0.01,0.1, 60.)
+    sim = LEOPowerAttitudeSimulator(0.1,1.0, 60.)
     obs = []
     states = []
     normWheelSpeed = []
@@ -568,7 +582,7 @@ if __name__=="__main__":
 
     tFinal = 2*180
     for ind in range(0,tFinal):
-        act = 0#randrange(3)
+        act = 1#randrange(3)
         actList.append(act)
         ob, state, _ = sim.run_sim(act)
         #normWheelSpeed.append(np.linalg.norm(abs(ob[3:6])))
