@@ -4,6 +4,7 @@ import numpy as np
 import scipy as sci
 from scipy.linalg import expm
 from gym import spaces
+import copy
 
 from basilisk_env.simulators import leoPowerAttitudeSimulator
 from Basilisk.utilities import macros as mc
@@ -24,8 +25,9 @@ class leoPowerAttEnv(gym.Env):
         self.max_length =int(3*180) # Specify the maximum number of planning intervals
 
         #   Tell the environment that it doesn't have a sim attribute...
-        self.sim_init = 0
+        self.simulator_init = 0
         self.simulator = None
+        self.simulator_backup = None
         self.reward_total = 0
 
         #   Set some attributes for the simulator; parameterized such that they can be varied in-sim
@@ -146,6 +148,8 @@ class leoPowerAttEnv(gym.Env):
         :return:
         '''
 
+        # print(self.curr_episode)
+
         self.action_episode_memory[self.curr_episode].append(action)
 
         #   Let the simulator handle action management:
@@ -175,7 +179,7 @@ class leoPowerAttEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
 
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw=self.powerDraw)
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
         self.simulator_init = 1
         self.seed()
 
@@ -187,5 +191,19 @@ class leoPowerAttEnv(gym.Env):
     def _get_state(self):
         """Get the observation.
         WIP: Work out which error representation to give the algo."""
+
+        return self.simulator.obs
+
+    def reset_init(self):
+        self.action_episode_memory.append([])
+        self.episode_over = False
+        self.curr_step = 0
+        self.reward_total = 0
+
+        initial_conditions = self.simulator.initial_conditions
+
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions)
+
+        self.simulator_init = 1
 
         return self.simulator.obs
