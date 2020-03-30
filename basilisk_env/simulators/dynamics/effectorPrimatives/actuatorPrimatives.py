@@ -17,7 +17,7 @@ def balancedHR16Triad(useRandom = False, randomBounds = (-400,400)):
 
         wheelSpeeds = uniform(randomBounds[0],randomBounds[1],3)
 
-        W1 = rwFactory.create('Honeywell_HR16'
+        RW1 = rwFactory.create('Honeywell_HR16'
                               , [1, 0, 0]
                               , maxMomentum=50.
                               , Omega=wheelSpeeds[0]  # RPM
