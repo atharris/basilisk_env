@@ -1,7 +1,5 @@
 # 3rd party modules
 import numpy as np
-import sys
-sys.path.append('/Users/adamherrmann/Library/Python/3.7/lib/python/site-packages/gym')
 
 #   Basilisk modules
 from Basilisk.utilities import SimulationBaseClass
