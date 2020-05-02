@@ -1,2 +1,3 @@
 from basilisk_env.envs.leoPowerAttitudeEnvironment import leoPowerAttEnv
-from basilisk_env.envs.opNavEnvironment import opNavEnv
+from basilisk_env.envs.leoNadirEnvironment import leoNadirEnv
+# from basilisk_env.envs.opNavEnvironment import opNavEnv

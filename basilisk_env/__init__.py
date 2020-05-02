@@ -9,6 +9,12 @@ register(
 )
 
 register(
+    id='leo_nadir_env-v0',
+    entry_point='basilisk_env.envs:leoNadirEnv'
+)
+
+
+register(
     id='opnav_env-v0',
     entry_point='basilisk_env.envs:opNavEnv'
 )

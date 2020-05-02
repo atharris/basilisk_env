@@ -6,15 +6,17 @@ from scipy.linalg import expm
 from gym import spaces
 import copy
 
-from basilisk_env.simulators import leoPowerAttitudeSimulator
+from basilisk_env.simulators import leoNadirSimulator
 from Basilisk.utilities import macros as mc
 from Basilisk.utilities import orbitalMotion as om
 
 
-class leoPowerAttEnv(gym.Env):
+class leoNadirEnv(gym.Env):
     """
-    Simple attitude/orbit control problem. The spacecraft must decide when to point at the ground (which generates a
-    reward) versus pointing at the sun (which increases the sim duration).
+    Extension of the leoPowerAttitudeEnvironment. The spacecraft must decide between pointing at the ground to collect
+    science data, pointing at the sun to charge, desaturating reaction wheels, and downlinking data. This is referred to
+    as the "nadir" simulator as science data is simply collected by nadir pointing. Specific imaging targets are not
+    considered.
     """
 
     def __init__(self):
@@ -22,12 +24,11 @@ class leoPowerAttEnv(gym.Env):
         print("Basilisk Attitude Mode Management Sim - Version {}".format(self.__version__))
 
         # General variables defining the environment
-        self.max_length =int(3*180) # Specify the maximum number of planning intervals
+        self.max_length = int(3*180) # Specify the maximum number of planning intervals
 
         #   Tell the environment that it doesn't have a sim attribute...
         self.simulator_init = 0
         self.simulator = None
-        self.simulator_backup = None
         self.reward_total = 0
 
         # Set initial conditions to none (gets assigned in reset)
@@ -38,20 +39,23 @@ class leoPowerAttEnv(gym.Env):
         self.powerDraw = -5. #  W
 
         #   Set up options, constants for this environment
-        self.step_duration = 180.  # Set step duration equal to 1 minute (180min ~ 2 orbits)
-        self.reward_mult = 1.
-        self.failure_penalty = 1000 #    Default is 50.
+        self.step_duration = 120.  # seconds, tune as desired
+        self.reward_mult = 0.95
+        # self.failure_penalty = 1000 #    Default is 50.
+        self.failure_penalty = 0.0 #    Default is 50.
         low = -1e16
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(5,1))
-        self.obs = np.zeros([5,])
+        self.obs = np.zeros([14,1])
 
         ##  Action Space description
-        #   0 - earth pointing (mission objective)
-        #   1 - sun pointing (power objective)
-        #   2 - desaturation (required for long-term pointing)
+        #   0 - Earth Pointing (point at Earth to take images)
+        #   1 - sun pointing (point at the sun to charge battery)
+        #   2 - desaturation (point at the sun and desaturate reaction wheels)
+        #   3 - Downlink (downlink collected imagery to ground station)
 
-        self.action_space = spaces.Discrete(3)
+        self.action_space = spaces.Discrete(4)
+        print(self.action_space.n)
 
         # Store what the agent tried
         self.curr_episode = -1
@@ -93,7 +97,7 @@ class leoPowerAttEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw = self.powerDraw)
+            self.simulator = leoNadirSimulator.LEONadirSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw = self.powerDraw)
             self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
@@ -107,11 +111,11 @@ class leoPowerAttEnv(gym.Env):
         ob = self._get_state()
 
         #   If the wheel speeds get too large, end the episode.
-        if ob[2] > 3000*mc.RPM:
+        if ob[2] > 4000*mc.RPM:
             self.episode_over = True
             reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
-            print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(3000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
+            print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(4000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
             print("Prior state was RPM:"+str(prev_ob[2])+" . body rate was:"+str(prev_ob[1]))
 
 
@@ -121,6 +125,13 @@ class leoPowerAttEnv(gym.Env):
             reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
             print("Ran out of power. Battery level at:"+str(ob[3])+", env step"+str(self.curr_step))
+
+        #   If we overflow the buffer, end the episode.
+        if ob[5] > self.simulator.storageUnit.storageCapacity:
+            self.episode_over = True
+            reward -= self.failure_penalty
+            self.reward_total -= self.failure_penalty
+            print("Data buffer overflow. Data storage level at:"+str(ob[5])+", env step"+str(self.curr_step))
 
         if self.sim_over:
             self.episode_over = True
@@ -163,11 +174,16 @@ class leoPowerAttEnv(gym.Env):
         Reward is based on time spent with the inertial attitude pointed towards the ground within a given tolerance.
 
         """
-        reward = 0
+        # If the sim is over, the agent failed, so return the zero reward (might not catch the very last step if we
+        # don't mess up, but whatever for now)
+        if self.sim_over and (self.curr_step != self.max_length):
+            reward = 0
+        # If the sim is not over and we did not fail, return reward
+        else:
+            reward = -self.obs[6][0]*self.reward_mult**self.curr_step
 
-        if self.action_episode_memory[self.curr_episode][-1] == 0:
-            reward = np.linalg.norm(self.reward_mult / (1. + self.obs[0]**2.0))
         return reward
+
 
     def reset(self):
         """
@@ -182,7 +198,7 @@ class leoPowerAttEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
         # Create the simulator
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+        self.simulator = leoNadirSimulator.LEONadirSimulator(.1, 1.0, self.step_duration)
         # Extract initial conditions from instantiation of simulator
         self.initial_conditions = self.simulator.initial_conditions
         self.simulator_init = 1
@@ -200,6 +216,13 @@ class leoPowerAttEnv(gym.Env):
         return self.simulator.obs
 
     def reset_init(self, initial_conditions=None):
+        # If the simulate already exists, close it gracefully or you will end up w too many spice objects
+        if self.simulator:
+            print("Closing Spice...")
+            self.simulator.close_gracefully()
+
+        del self.simulator
+
         self.action_episode_memory.append([])
         self.episode_over = False
         self.curr_step = 0
@@ -210,8 +233,7 @@ class leoPowerAttEnv(gym.Env):
             self.initial_conditions = initial_conditions
         # Otherwise, the initial conditions should have been defined during reset()
 
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration,
-                                                                             self.initial_conditions)
+        self.simulator = leoNadirSimulator.LEONadirSimulator(.1, 1.0, self.step_duration, self.initial_conditions)
 
         self.simulator_init = 1
 
