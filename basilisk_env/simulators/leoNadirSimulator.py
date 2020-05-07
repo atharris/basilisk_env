@@ -157,7 +157,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
             # Reaction Wheel speeds
             "wheelSpeeds": uniform(-400,400,3), # RPM
-            # "wheelSpeeds": uniform(-400,400,3), # RPM
+            # "wheelSpeeds": uniform(-800,800,3), # RPM
 
             # Solar Panel Parameters
             "nHat_B": np.array([0,1,0]),

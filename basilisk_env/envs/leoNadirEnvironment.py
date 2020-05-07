@@ -180,7 +180,7 @@ class leoNadirEnv(gym.Env):
             reward = 0
         # If the sim is not over and we did not fail, return reward
         else:
-            reward = -self.obs[6][0]*self.reward_mult**self.curr_step
+            reward = -self.obs[6][0]*self.reward_mult**self.curr_step+1
 
         return reward
 
