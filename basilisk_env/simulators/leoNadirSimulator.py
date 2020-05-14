@@ -118,6 +118,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         return
 
     def __del__(self):
+        self.close_gracefully()
         print('Destructor called, simulation deleted')
 
     def set_ICs(self):
@@ -152,12 +153,13 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             "scaleHeight": 8e3,  #m
 
             # Disturbance Torque
+            # "disturbance_magnitude": 1e-6,
             "disturbance_magnitude": 2e-4,
             "disturbance_vector": np.random.standard_normal(3),
 
             # Reaction Wheel speeds
-            "wheelSpeeds": uniform(-400,400,3), # RPM
-            # "wheelSpeeds": uniform(-800,800,3), # RPM
+            # "wheelSpeeds": uniform(-400,400,3), # RPM
+            "wheelSpeeds": uniform(-800,800,3), # RPM
 
             # Solar Panel Parameters
             "nHat_B": np.array([0,1,0]),
@@ -166,6 +168,8 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
             # Power Sink Parameters
             "powerDraw": -5.0, # W
+            "transmitterPowerDraw": -5.0, # W
+            
 
             # Battery Parameters
             "storageCapacity": 20.0 * 3600.,
@@ -191,8 +195,10 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             "thrForceSign": 1,
 
             # Thruster momentum dumping FSW config
-            "maxCounterValue": 4,
+            #"maxCounterValue": 4,
+            "maxCounterValue": 8,
             "thrMinFireTime": 0.002, #   Seconds
+            # "thrMinFireTime": 0.2, #   Seconds
 
             # Ground station - Located in Boulder, CO
             "boulderGroundStationPlanetRadius": astroFunctions.E_radius*1e3,
@@ -343,15 +349,18 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.densityModel.scaleHeight = self.initial_conditions.get("scaleHeight")
 
         self.dragEffector = facetDragDynamicEffector.FacetDragDynamicEffector()
-        #   Set up the goemetry of a 6U cubesat
-        self.dragEffector.addFacet(0.2*0.3, 2.2, [1,0,0], [0.05, 0.0, 0])
-        self.dragEffector.addFacet(0.2*0.3, 2.2, [-1,0,0], [0.05, 0.0, 0])
-        self.dragEffector.addFacet(0.1*0.2, 2.2, [0,1,0], [0, 0.15, 0])
-        self.dragEffector.addFacet(0.1*0.2, 2.2, [0,-1,0], [0, -0.15, 0])
-        self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,1], [0,0, 0.1])
-        self.dragEffector.addFacet(0.1*0.3, 2.2, [0,0,-1], [0, 0, -0.1])
-        self.dragEffector.addFacet(1.*2., 2.2, [0,1,0],[0,2.,0])
-        self.dragEffector.addFacet(1.*2., 2.2, [0,-1,0],[0,2.,0])
+        self.dragEffector.ModelTag = "FacetDrag"
+        #  Set up the geometry of a small satellite, starting w/ bus
+        self.dragEffector.addFacet(width*depth, 2.2, [1,0,0], [height/2, 0.0, 0])
+        self.dragEffector.addFacet(width*depth, 2.2, [-1,0,0], [height/2, 0.0, 0])
+        self.dragEffector.addFacet(height*width, 2.2, [0,1,0], [0, depth/2, 0])
+        self.dragEffector.addFacet(height*width, 2.2, [0,-1,0], [0, -depth/2, 0])
+        self.dragEffector.addFacet(height*depth, 2.2, [0,0,1], [0,0, width/2])
+        self.dragEffector.addFacet(height*depth, 2.2, [0,0,-1], [0, 0, -width/2])
+
+        # Add solar panels
+        self.dragEffector.addFacet(self.initial_conditions.get("panelArea")/2, 2.2, [0,1,0], [0,height,0])
+        self.dragEffector.addFacet(self.initial_conditions.get("panelArea")/2, 2.2, [0,-1,0], [0,height,0])
 
         self.dragEffector.atmoDensInMsgName = self.densityModel.envOutMsgNames[-1]
         self.scObject.addDynamicEffector(self.dragEffector)
@@ -714,6 +723,16 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
         #   Log inertial attitude, position
         self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
+
+        # # Total rotational angular momentum
+        # self.AddVariableForLogging(self.scObject.ModelTag + ".totRotAngMomPntC_N", self.dynRate, 0, 2)
+        # # Sum of forces about body
+        # self.AddVariableForLogging(self.scObject.ModelTag + ".sumForceExternal_B", self.dynRate, 0, 2)
+        # # Drag effector torque
+        # self.AddVariableForLogging(self.dragEffector.ModelTag + ".torqueExternalPntB_B", self.dynRate, 0, 2)
+        # # Sum of torques about body
+        # self.AddVariableForLogging(self.scObject.ModelTag + ".sumTorquePntB_B", self.dynRate, 0, 2)
+
         self.TotalSim.logThisMessage(self.simpleNavObject.outputTransName,
                                                samplingTime)
         self.TotalSim.logThisMessage(self.simpleNavObject.outputAttName,
@@ -834,7 +853,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         # Here we change the step size based on the mode
         # If we are desaturating, run for twice the amount of time
         if self.modeRequest == "2":
-            self.simTime += 2*self.step_duration
+            self.simTime += 5*self.step_duration
             simulationTime = mc.sec2nano(self.simTime)
         # Otherwise, take the standard step
         else:
@@ -876,6 +895,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         simDict2 = self.pullMultiMessageLogData([self.transmitter.nodeDataOutMsgName + '.baudRate'], [
                 list(range(1))],
             ['double'], int(self.step_duration/self.dynRate))
+
 
         attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
         attRef = simDict["att_reference.sigma_RN"]
@@ -924,7 +944,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         :return:
         """
         self.gravFactory.unloadSpiceKernels()
-        #self.gravFactory.spiceObject.clearKeeper()
+        # self.gravFactory.spiceObject.clearKeeper()
         # self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de430.bsp')
         # self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'naif0012.tls')
         # self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de-403-masses.tpc')

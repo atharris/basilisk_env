@@ -10,7 +10,6 @@ from basilisk_env.simulators import leoNadirSimulator
 from Basilisk.utilities import macros as mc
 from Basilisk.utilities import orbitalMotion as om
 
-
 class leoNadirEnv(gym.Env):
     """
     Extension of the leoPowerAttitudeEnvironment. The spacecraft must decide between pointing at the ground to collect
@@ -38,8 +37,12 @@ class leoNadirEnv(gym.Env):
         self.mass = 330.0 # kg
         self.powerDraw = -5. #  W
 
+        # Set the dynRate for the env, which is passed into the simulator
+        self.dynRate = 0.1
+        self.fswRate = 1.0
+
         #   Set up options, constants for this environment
-        self.step_duration = 120.  # seconds, tune as desired
+        self.step_duration = 180.  # seconds, tune as desired
         self.reward_mult = 0.95
         # self.failure_penalty = 1000 #    Default is 50.
         self.failure_penalty = 0.0 #    Default is 50.
@@ -97,7 +100,7 @@ class leoNadirEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = leoNadirSimulator.LEONadirSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw = self.powerDraw)
+            self.simulator = leoNadirSimulator.LEONadirSimulator(self.dynRate, self.fswRate, self.step_duration, mass=self.mass, powerDraw = self.powerDraw)
             self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
@@ -111,11 +114,11 @@ class leoNadirEnv(gym.Env):
         ob = self._get_state()
 
         #   If the wheel speeds get too large, end the episode.
-        if ob[2] > 4000*mc.RPM:
+        if ob[2] > 6000*mc.RPM:
             self.episode_over = True
             reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
-            print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(4000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
+            print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(6000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
             print("Prior state was RPM:"+str(prev_ob[2])+" . body rate was:"+str(prev_ob[1]))
 
 
@@ -145,7 +148,7 @@ class leoNadirEnv(gym.Env):
                 'full_states': self.debug_states,
                 'obs': ob
             }
-            self.simulator.close_gracefully() # Stop spice from blowing up
+            # self.simulator.close_gracefully() # Stop spice from blowing up
         else:
             info={
                 'full_states': self.debug_states,
@@ -198,7 +201,7 @@ class leoNadirEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
         # Create the simulator
-        self.simulator = leoNadirSimulator.LEONadirSimulator(.1, 1.0, self.step_duration)
+        self.simulator = leoNadirSimulator.LEONadirSimulator(self.dynRate, self.fswRate, self.step_duration)
         # Extract initial conditions from instantiation of simulator
         self.initial_conditions = self.simulator.initial_conditions
         self.simulator_init = 1
@@ -219,7 +222,7 @@ class leoNadirEnv(gym.Env):
         # If the simulate already exists, close it gracefully or you will end up w too many spice objects
         if self.simulator:
             print("Closing Spice...")
-            self.simulator.close_gracefully()
+            # self.simulator.close_gracefully()
 
         del self.simulator
 
@@ -233,7 +236,7 @@ class leoNadirEnv(gym.Env):
             self.initial_conditions = initial_conditions
         # Otherwise, the initial conditions should have been defined during reset()
 
-        self.simulator = leoNadirSimulator.LEONadirSimulator(.1, 1.0, self.step_duration, self.initial_conditions)
+        self.simulator = leoNadirSimulator.LEONadirSimulator(self.dynRate, self.fswRate, self.step_duration, self.initial_conditions)
 
         self.simulator_init = 1
 
