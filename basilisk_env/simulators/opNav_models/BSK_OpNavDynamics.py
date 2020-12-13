@@ -28,7 +28,7 @@ from Basilisk.simulation import (spacecraftPlus, gravityEffector, extForceTorque
                                  camera)
 from Basilisk.utilities import simIncludeThruster, simIncludeRW, simIncludeGravBody, unitTestSupport
 from Basilisk.utilities import RigidBodyKinematics as rbk
-from Basilisk import pyswice
+#from Basilisk import pyswice
 from Basilisk import __path__
 
 from Basilisk.fswAlgorithms import attTrackingError, rwMotorVoltage, fswMessages
