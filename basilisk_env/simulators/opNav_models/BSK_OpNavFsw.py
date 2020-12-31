@@ -449,7 +449,7 @@ class BSKFswModels():
         self.opNavCNN.imageInMsgName = "opnav_image"
         self.opNavCNN.opnavCirclesOutMsgName = "circles_data"
         self.opNavCNN.pixelNoise = [5,5,5]
-        self.opNavCNN.pathToNetwork = bskPath + "/../../src/fswAlgorithms/imageProcessing/centerRadiusCNN/position_net2_trained_11-14.onnx"
+        self.opNavCNN.pathToNetwork = bskPath + "/../../src/fswAlgorithms/imageProcessing/centerRadiusCNN/CAD.onnx"
 
     def SetImageProcessing(self):
         self.imageProcessing.imageInMsgName = "opnav_image"
