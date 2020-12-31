@@ -1,22 +1,31 @@
-''' '''
-'''
- ISC License
+#
+#  ISC License
+#
+#  Copyright (c) 2016, Autonomous Vehicle Systems Lab, University of Colorado at Boulder
+#
+#  Permission to use, copy, modify, and/or distribute this software for any
+#  purpose with or without fee is hereby granted, provided that the above
+#  copyright notice and this permission notice appear in all copies.
+#
+#  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+#  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+#  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+#  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+#  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+#  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+#  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+#
+r"""
+Overview
+--------
 
- Copyright (c) 2016, Autonomous Vehicle Systems Lab, University of Colorado at Boulder
+``OpNavScenarios/models/BSK_OpNavDynamics.py`` is similar to the :ref:`Folder_BskSim` versions seen previously.
+The main additions are
+the instantiation of :ref:`vizInterface`, and the camera module.
 
- Permission to use, copy, modify, and/or distribute this software for any
- purpose with or without fee is hereby granted, provided that the above
- copyright notice and this permission notice appear in all copies.
 
- THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+"""
 
-'''
 
 import numpy as np
 import math, sys, os, inspect
@@ -24,33 +33,31 @@ from Basilisk.utilities import macros as mc
 from Basilisk.utilities import unitTestSupport as sp
 from Basilisk.simulation import (spacecraftPlus, gravityEffector, extForceTorque, simple_nav, spice_interface,
                                  reactionWheelStateEffector, coarse_sun_sensor, eclipse, alg_contain, bore_ang_calc,
-                                 thrusterDynamicEffector, simFswInterfaceMessages, ephemeris_converter, vizInterface,
+                                 thrusterDynamicEffector, ephemeris_converter, vizInterface,
                                  camera)
 from Basilisk.utilities import simIncludeThruster, simIncludeRW, simIncludeGravBody, unitTestSupport
 from Basilisk.utilities import RigidBodyKinematics as rbk
-from Basilisk import pyswice
+from Basilisk.topLevelModules import pyswice
 from Basilisk import __path__
 
-from Basilisk.fswAlgorithms import attTrackingError, rwMotorVoltage, fswMessages
+from Basilisk.fswAlgorithms import attTrackingError
 
 bskPath = __path__[0]
 filename = inspect.getframeinfo(inspect.currentframe()).filename
 path = os.path.dirname(os.path.abspath(filename))
 
-
-
-
 class BSKDynamicModels():
+    """
+    BSK Dynamics model for the op nav simulations
+    """
     def __init__(self, SimBase, dynRate):
         # Define process name, task name and task time-step
         self.processName = SimBase.DynamicsProcessName
         self.taskName = "DynamicsTask"
-        self.taskName2 = "DynamicsTaskSlow"
         self.taskCamera = "CameraTask"
         self.processTasksTimeStep = mc.sec2nano(dynRate)
         # Create task
-        SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskName, self.processTasksTimeStep), 1001)
-        SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskName2, mc.sec2nano(120)), 1000)
+        SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskName, self.processTasksTimeStep), 1000)
         SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskCamera, mc.sec2nano(60)), 999)
 
         # Instantiate Dyn modules as objects
@@ -60,26 +67,44 @@ class BSKDynamicModels():
 
         self.SpiceObject = spice_interface.SpiceInterface()
         self.scObject = spacecraftPlus.SpacecraftPlus()
+        self.gravFactory = simIncludeGravBody.gravBodyFactory()
+        self.extForceTorqueObject = extForceTorque.ExtForceTorque()
         self.SimpleNavObject = simple_nav.SimpleNav()
+        self.TruthNavObject = simple_nav.SimpleNav()
         self.vizInterface = vizInterface.VizInterface()
+        self.instrumentSunBore = bore_ang_calc.BoreAngCalc()
         self.eclipseObject = eclipse.Eclipse()
         self.CSSConstellationObject = coarse_sun_sensor.CSSConstellation()
         self.rwStateEffector = reactionWheelStateEffector.ReactionWheelStateEffector()
+        self.thrustersDynamicEffector = thrusterDynamicEffector.ThrusterDynamicEffector()
         self.cameraMod = camera.Camera()
 
         self.ephemObject = ephemeris_converter.EphemerisConverter()
 
         # Initialize all modules and write init one-time messages
         self.InitAllDynObjects()
+        # self.WriteInitDynMessages(SimBase)
+
+        self.truthRefErrors = attTrackingError.attTrackingErrorConfig()
+        self.truthRefErrorsWrap = alg_contain.AlgContain(self.truthRefErrors,
+                                                         attTrackingError.Update_attTrackingError,
+                                                         attTrackingError.SelfInit_attTrackingError,
+                                                         attTrackingError.CrossInit_attTrackingError,
+                                                         attTrackingError.Reset_attTrackingError)
+        self.truthRefErrorsWrap.ModelTag = "truthRefErrors"
+
+        self.InitAllAnalysisObjects()
 
         # Assign initialized modules to tasks
         SimBase.AddModelToTask(self.taskName, self.scObject, None, 201)
         SimBase.AddModelToTask(self.taskName, self.SimpleNavObject, None, 109)
-        SimBase.AddModelToTask(self.taskName2, self.SpiceObject, 200)
-        SimBase.AddModelToTask(self.taskName2, self.ephemObject, 199)
+        SimBase.AddModelToTask(self.taskName, self.TruthNavObject, None, 110)
+        SimBase.AddModelToTask(self.taskName, self.SpiceObject, 200)
+        SimBase.AddModelToTask(self.taskName, self.ephemObject, 199)
         SimBase.AddModelToTask(self.taskName, self.CSSConstellationObject, None, 299)
-        SimBase.AddModelToTask(self.taskName2, self.eclipseObject, None, 204)
+        SimBase.AddModelToTask(self.taskName, self.eclipseObject, None, 204)
         SimBase.AddModelToTask(self.taskName, self.rwStateEffector, None, 301)
+        SimBase.AddModelToTask(self.taskName, self.extForceTorqueObject, None, 300)
         SimBase.AddModelToTask(self.taskName, self.vizInterface, None, 100)
         SimBase.AddModelToTask(self.taskCamera, self.cameraMod, None, 99)
 
@@ -94,14 +119,14 @@ class BSKDynamicModels():
         self.cameraMod.saveDir = 'Test/'
 
         # Noise parameters
-        self.cameraMod.gaussian = 0
-        self.cameraMod.darkCurrent = 0
-        self.cameraMod.saltPepper = 0
-        self.cameraMod.cosmicRays = 0
-        self.cameraMod.blurParam = 0
+        # self.cameraMod.gaussian = 2
+        # self.cameraMod.darkCurrent = 0
+        # self.cameraMod.saltPepper = 0.5
+        # self.cameraMod.cosmicRays = 1
+        self.cameraMod.blurParam = 3
 
         # Camera config
-        # self.cameraMod.cameraIsOn = 1
+        self.cameraMod.cameraIsOn = 1
         self.cameraMod.cameraID = 1
         self.cameraRate = 60
         self.cameraMod.renderRate = int(mc.sec2nano(self.cameraRate))  # in
@@ -110,13 +135,11 @@ class BSKDynamicModels():
         self.cameraMod.cameraPos_B = [0., 0.2, 0.2]  # in meters
         self.cameraRez = [512, 512]  #[1024,1024] # in pixels
         self.cameraSize = [10.*1E-3, self.cameraRez[1]/self.cameraRez[0]*10.*1E-3]  # in m
-        self.cameraMod.sensorSize = self.cameraSize
         self.cameraMod.resolution = self.cameraRez
-        self.cameraMod.fieldOfView = np.deg2rad(55)  # in degrees
-        self.cameraMod.focalLength = self.cameraMod.sensorSize[1]/2./np.tan(self.cameraMod.fieldOfView/2.) #in m
+        self.cameraMod.fieldOfView = np.deg2rad(55)
         self.cameraMod.parentName = 'inertial'
         self.cameraMod.skyBox = 'black'
-        self.cameraFocal = self.cameraMod.focalLength
+        self.cameraFocal = self.cameraSize[1]/2./np.tan(self.cameraMod.fieldOfView/2.) #in m
 
 
     def SetVizInterface(self):
@@ -129,9 +152,11 @@ class BSKDynamicModels():
             os.mkdir(home + '_VizFiles')
         fileName = home + '_VizFiles/' + name
 
-        self.vizInterface.saveFile = False
+        scData = vizInterface.VizSpacecraftData()
+        scData.spacecraftName = 'inertial'
+        self.vizInterface.scData.push_back(scData)
+        self.vizInterface.comAddress = os.environ['viz_address']
         self.vizInterface.opNavMode = 2
-        self.vizInterface.spacecraftName = 'inertial'
         self.vizInterface.opnavImageOutMsgName = "unity_image"#"opnav_image"#
         self.vizInterface.spiceInMsgName = vizInterface.StringVector(["earth_planet_data",
                                                                 "mars barycenter_planet_data",
@@ -144,7 +169,7 @@ class BSKDynamicModels():
         # self.vizInterface.spiceInMsgName = vizInterface.StringVector(["mars barycenter_planet_data"])
         # self.vizInterface.planetNames = vizInterface.StringVector(["mars barycenter"])
         # vizMessager.numRW = 4
-        # self.vizInterface.protoFilename = fileName
+        self.vizInterface.protoFilename = fileName
 
     def SetSpacecraftHub(self):
         self.scObject.ModelTag = "spacecraftBody"
@@ -184,7 +209,7 @@ class BSKDynamicModels():
         self.marsGravBody.useSphericalHarmParams = True
         gravityEffector.loadGravFromFile(
             self.simBasePath + '/supportData/LocalGravData/GGM2BData.txt',
-                                         self.marsGravBody.spherHarm, 3)
+                                         self.marsGravBody.spherHarm, 2)
 
         self.jupiterGravBody = gravityEffector.GravBodyData()
         self.jupiterGravBody.bodyInMsgName = "jupiter barycenter_planet_data"
@@ -345,6 +370,12 @@ class BSKDynamicModels():
             messageMap[planet + '_planet_data'] = planet + '_ephemeris_data'
         self.ephemObject.messageNameMap = ephemeris_converter.map_string_string(messageMap)
 
+    def SetinstrumentSunBore(self):
+        self.instrumentSunBore.ModelTag = "instrumentBoreSun"
+        self.instrumentSunBore.StateString = "inertial_state_output"
+        self.instrumentSunBore.celBodyString = "sun_planet_data"
+        self.instrumentSunBore.OutputDataString = "instrument_sun_bore"
+        self.instrumentSunBore.boreVec_B = [0.0, 1.0, 0.0]
 
     def SetSimpleGrav(self):
         # clear prior gravitational body and SPICE setup definitions
@@ -378,8 +409,10 @@ class BSKDynamicModels():
         # self.SetgravityEffector()
         self.SetSimpleGrav()
         self.SetEclipseObject()
+        self.SetExternalForceTorqueObject()
         self.SetSimpleNavObject()
         self.SetReactionWheelDynEffector()
+        self.SetACSThrusterStateEffector()
         self.SetCSSConstellation()
         self.SetVizInterface()
         self.SetEphemConvert()
@@ -388,6 +421,10 @@ class BSKDynamicModels():
         self.SetSpiceObject()
 
 
+    def InitAllAnalysisObjects(self):
+        self.SetTruthNavObject()
+        self.SetTruthErrorsData()
+        self.SetinstrumentSunBore()
 
     # Global call to create every required one-time message
     def WriteInitDynMessages(self, SimBase):

@@ -208,7 +208,7 @@ class scenario_OpNav(BSKSim):
             self.get_DynModel().SimpleNavObject.outputAttName + '.vehSunPntBdy',
             self.get_FswModel().relativeODData.filtDataOutMsgName + ".state",
             self.get_FswModel().relativeODData.filtDataOutMsgName + ".covar"
-        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(NUM_STATES)), list(range(NUM_STATES*NUM_STATES))], 1)
+        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(NUM_STATES)), list(range(NUM_STATES*NUM_STATES))], ['float']*6,numRecords=1)
 
         # sunHead = simDict["sun_planet_data" + ".PositionVector"]
         sunHead_B = simDict[self.get_DynModel().SimpleNavObject.outputAttName + '.vehSunPntBdy']
@@ -262,9 +262,8 @@ if __name__=="__main__":
     Test execution of the simulator with random actions and plot the observation space.
     """
 
-    # appPath = '/Applications/OpNavScene.app'
-    appPath = '/Applications/Vizard.app'
-    child = subprocess.Popen(["open", appPath, "--args", "-opNavMode", "tcp://localhost:5556"])  # ,, "-batchmode"
+    appPath = os.environ['viz_app']
+    child = subprocess.Popen([appPath, "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{os.environ['viz_port']}"], stdout=subprocess.DEVNULL)  # ,, "-batchmode"
 
     actHist = [1, 1, 0, 0, 1, 1, 1, 0, 0, 1]
     sim = scenario_OpNav(0.5, 5., 50.)
