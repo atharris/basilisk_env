@@ -1,6 +1,8 @@
 # 3rd party modules
 import gym
 import numpy as np
+import subprocess
+import os
 from gym import spaces
 
 from basilisk_env.simulators import opNavSimulator
@@ -14,11 +16,11 @@ class opNavEnv(gym.Env):
     """
 
     def __init__(self):
-        self.__version__ = "0.0.1"
+        self.__version__ = "0.0.2"
         print("Basilisk OpNav Mode Management Sim - Version {}".format(self.__version__))
 
         # General variables defining the environment
-        self.max_length =int(40) # Specify the maximum number of planning intervals
+        self.max_length =int(20) # Specify the maximum number of planning intervals
 
         #   Tell the environment that it doesn't have a sim attribute...
         self.sim_init = 0
@@ -33,7 +35,6 @@ class opNavEnv(gym.Env):
         self.observation_space = spaces.Box(low, high,shape=(4,1))
         self.obs = np.zeros([4,])
         self.debug_states = np.zeros([12,])
-
         ##  Action Space description
         #   0 - earth pointing (mission objective)
         #   1 - sun pointing (power objective)
@@ -80,9 +81,12 @@ class opNavEnv(gym.Env):
                  use this for learning.
         """
 
-        if self.simulator_init == 0:
+        if self.sim_init == 0:
+            
             self.simulator = opNavSimulator.scenario_OpNav(1., 1., self.step_duration)
-            self.simulator_init = 1
+            self.sim_init = 1
+
+        
 
         if self.curr_step%10 == 0:
             print("At step ", self.curr_step, " of ", self.max_length)
@@ -100,7 +104,7 @@ class opNavEnv(gym.Env):
         if self.sim_over:
             self.episode_over = True
             print("End of episode")
-
+            
 
         if self.episode_over:
             info = {'episode':{
@@ -110,6 +114,7 @@ class opNavEnv(gym.Env):
                 'obs': ob
             }
             self.simulator.close_gracefully() # Stop spice from blowing up
+            self.sim_init = 0
         else:
             info={
                 'full_states': self.debug_states,
@@ -158,11 +163,9 @@ class opNavEnv(gym.Env):
         self.episode_over = False
         self.curr_step = 0
         self.reward_total = 0
-
         self.simulator = opNavSimulator.scenario_OpNav(1., 1., self.step_duration)
-        self.simulator_init = 1
-        self.seed()
-
+        self.sim_init=1
+        
         return self.simulator.obs
 
     def _render(self, mode='human', close=False):

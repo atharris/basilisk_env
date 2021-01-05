@@ -29,6 +29,36 @@ except:
 params = {'axes.labelsize': 8,'axes.titlesize':8, 'legend.fontsize': 8, 'xtick.labelsize': 7, 'ytick.labelsize': 7, 'text.usetex': True}
 mpl.rcParams.update(params)
 
+class viz_manager(object):
+    """
+    Manages an instance of the Vizard astrodynamics visualizer.
+    """
+    def __init__(self):
+
+        self.viz_init = False
+
+    def createViz(self, port=5000):
+        """
+        Creates a Viz instance.
+        """
+        if self.viz_init == False:
+            self.viz_proc = subprocess.Popen([os.environ['viz_app'], "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{os.environ['viz_port']}"], stdout=subprocess.DEVNULL)  # ,, "-batchmode"
+            self.viz_init=True
+        else: 
+            pass
+
+
+    def stopViz(self):
+        """ 
+        Kills all existing vizard instances.
+        """
+        self.viz_proc.kill() #  Kill the viz process
+        #   If we're on WSL, also invoke kill:
+        proc = subprocess.Popen(["/mnt/c/Windows/System32/TASKKILL.exe","/IM","Vizard.exe", "/F"])
+        time.sleep(1) # Give taskill some time to kill the task
+        self.viz_init = False
+        return 
+
 class scenario_OpNav(BSKSim):
     '''
     Simulates a spacecraft in LEO with atmospheric drag and J2.
@@ -72,6 +102,8 @@ class scenario_OpNav(BSKSim):
         self.dynRate = dynRate
         self.step_duration = step_duration
 
+
+
         self.set_DynModel(BSK_OpNavDynamics)
         self.set_FswModel(BSK_OpNavFsw)
         self.initInterfaces()
@@ -79,10 +111,9 @@ class scenario_OpNav(BSKSim):
         self.configure_initial_conditions()
         self.get_DynModel().vizInterface.opNavMode = 1
 
-        # appPath = '/Applications/OpNavScene.app'  # in mode 2 to train
-        # # appPath = '/Applications/Vizard.app' #in mode 1 to see it
-        # self.child = subprocess.Popen(["open", appPath, "--args", "-opNavMode", "tcp://localhost:5556"])  # ,, "-batchmode"
-        # print("Spawning Vizard")
+        self.viz_manager = viz_manager()
+        self.viz_manager.createViz(port=5000)
+        
 
         self.simTime = 0.0
         self.numModes = 50
@@ -247,6 +278,7 @@ class scenario_OpNav(BSKSim):
         self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'de-403-masses.tpc')
         self.get_DynModel().SpiceObject.unloadSpiceKernel(self.get_DynModel().SpiceObject.SPICEDataPath, 'pck00010.tpc')
 
+        self.viz_manager.stopViz()
         # try:
         #     os.kill(self.child.pid + 1, signal.SIGKILL)
         #     print("Closing Vizard")
@@ -263,8 +295,10 @@ if __name__=="__main__":
     """
 
     appPath = os.environ['viz_app']
-    child = subprocess.Popen([appPath, "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{os.environ['viz_port']}"], stdout=subprocess.DEVNULL)  # ,, "-batchmode"
-
+    child = subprocess.Popen(
+        [os.environ['viz_app'], "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{os.environ['viz_port']}"],
+         stdout=subprocess.DEVNULL)
+         
     actHist = [1, 1, 0, 0, 1, 1, 1, 0, 0, 1]
     sim = scenario_OpNav(0.5, 5., 50.)
     obs = []
@@ -296,10 +330,10 @@ if __name__=="__main__":
     obs = np.asarray(obs)
     states = np.asarray(states)
 
-    # try:
-    #     os.kill(child.pid + 1, signal.SIGKILL)
-    # except:
-    #     print("IDK how to turn this thing off")
+    try:
+        child.terminate()
+    except:
+        print("os.kill failed; fear for your lives")
 
 
     """Check results here"""
