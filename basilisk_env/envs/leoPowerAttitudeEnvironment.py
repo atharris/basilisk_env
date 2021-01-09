@@ -18,7 +18,7 @@ class leoPowerAttEnv(gym.Env):
     """
 
     def __init__(self):
-        self.__version__ = "0.0.1"
+        self.__version__ = "0.1.0"
         print("Basilisk Attitude Mode Management Sim - Version {}".format(self.__version__))
 
         # General variables defining the environment
@@ -33,11 +33,13 @@ class leoPowerAttEnv(gym.Env):
         #   Set some attributes for the simulator; parameterized such that they can be varied in-sim
         self.mass = 330.0 # kg
         self.powerDraw = -5. #  W
+        self.wheel_limit = 3000*mc.RPM # 3000 RPM in radians/s
+        self.power_max = 20.0 # W/Hr
 
         #   Set up options, constants for this environment
         self.step_duration = 180.  # Set step duration equal to 1 minute (180min ~ 2 orbits)
-        self.reward_mult = 1.
-        self.failure_penalty = 1000 #    Default is 50.
+        self.reward_mult = 1./self.max_length # Normalize reward to episode duration; '1' represents 100% ground observation time
+        self.failure_penalty = 1 #    Default is 50.
         low = -1e16
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(5,1))
@@ -102,9 +104,10 @@ class leoPowerAttEnv(gym.Env):
         reward = self._get_reward()
         self.reward_total += reward
         ob = self._get_state()
-
+        ob[2] = ob[2]/self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
+        ob[3] = ob[3] / self.power_max #    Normalize current power to fraction of total power
         #   If the wheel speeds get too large, end the episode.
-        if ob[2] > 3000*mc.RPM:
+        if ob[2] > 1:
             self.episode_over = True
             reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
