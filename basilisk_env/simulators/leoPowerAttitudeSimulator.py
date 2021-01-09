@@ -155,7 +155,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             "wheelSpeeds": uniform(-800,800,3), # RPM
 
             # Solar Panel Parameters
-            "nHat_B": np.array([0,1,0]),
+            "nHat_B": np.array([0,-1,0]),
             "panelArea": 0.2*0.3,
             "panelEfficiency": 0.20,
 
