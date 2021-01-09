@@ -1,5 +1,6 @@
 # 3rd party modules
 import numpy as np
+import socket, errno
 
 #   Basilisk modules
 from Basilisk.utilities import SimulationBaseClass
@@ -29,6 +30,26 @@ except:
 params = {'axes.labelsize': 8,'axes.titlesize':8, 'legend.fontsize': 8, 'xtick.labelsize': 7, 'ytick.labelsize': 7, 'text.usetex': True}
 mpl.rcParams.update(params)
 
+def socket_in_use(address, port):
+    """
+    Checks whether a given address+port is in use.
+    """
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    try:
+        s.bind((address, port))
+        return False
+    except socket.error as e:
+        if e.errno == errno.EADDRINUSE:
+            print("Port is already in use")
+            return True
+        else:
+            # something else raised the socket.error exception
+            print(e)
+            return True
+
+
 class viz_manager(object):
     """
     Manages an instance of the Vizard astrodynamics visualizer.
@@ -36,17 +57,26 @@ class viz_manager(object):
     def __init__(self):
 
         self.viz_init = False
+        self.fail_count = 0
+        self.fail_limit = 20
 
-    def createViz(self, port=5000):
+    def createViz(self, port=5556):
         """
         Creates a Viz instance.
         """
         if self.viz_init == False:
-            self.viz_proc = subprocess.Popen([os.environ['viz_app'], "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{os.environ['viz_port']}"], stdout=subprocess.DEVNULL)  # ,, "-batchmode"
+            #   Check if the desired port is open:
+            #if not socket_in_use(os.environ['viz_address'],port) and self.fail_count < self.fail_limit:
+            self.viz_proc = subprocess.Popen([os.environ['viz_app'], "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{port}"], stdout=subprocess.DEVNULL)  # ,, "-batchmode"
             self.viz_init=True
+            return port
+            # else:
+            #     self.fail_count = self.fail_count + 1
+            #     self.createViz(port=port+1)
         else: 
             pass
 
+    
 
     def stopViz(self):
         """ 
@@ -112,7 +142,7 @@ class scenario_OpNav(BSKSim):
         self.get_DynModel().vizInterface.opNavMode = 1
 
         self.viz_manager = viz_manager()
-        self.viz_manager.createViz(port=5000)
+        self.viz_port = self.viz_manager.createViz(port=5000)
         
 
         self.simTime = 0.0
@@ -293,11 +323,6 @@ if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-
-    appPath = os.environ['viz_app']
-    child = subprocess.Popen(
-        [os.environ['viz_app'], "--args", "-opNavMode", f"tcp://{os.environ['viz_address']}:{os.environ['viz_port']}"],
-         stdout=subprocess.DEVNULL)
          
     actHist = [1, 1, 0, 0, 1, 1, 1, 0, 0, 1]
     sim = scenario_OpNav(0.5, 5., 50.)

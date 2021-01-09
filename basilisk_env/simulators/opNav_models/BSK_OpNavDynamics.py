@@ -50,12 +50,13 @@ class BSKDynamicModels():
     """
     BSK Dynamics model for the op nav simulations
     """
-    def __init__(self, SimBase, dynRate):
+    def __init__(self, SimBase, dynRate, viz_port):
         # Define process name, task name and task time-step
         self.processName = SimBase.DynamicsProcessName
         self.taskName = "DynamicsTask"
         self.taskCamera = "CameraTask"
         self.processTasksTimeStep = mc.sec2nano(dynRate)
+        self.viz_port = viz_port
         # Create task
         SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskName, self.processTasksTimeStep), 1000)
         SimBase.dynProc.addTask(SimBase.CreateNewTask(self.taskCamera, mc.sec2nano(60)), 999)
@@ -156,6 +157,7 @@ class BSKDynamicModels():
         scData.spacecraftName = 'inertial'
         self.vizInterface.scData.push_back(scData)
         self.vizInterface.comAddress = os.environ['viz_address']
+        self.vizInterface.comPortNumber = str(self.viz_port)
         self.vizInterface.opNavMode = 2
         self.vizInterface.opnavImageOutMsgName = "unity_image"#"opnav_image"#
         self.vizInterface.spiceInMsgName = vizInterface.StringVector(["earth_planet_data",
