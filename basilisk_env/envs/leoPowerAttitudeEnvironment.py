@@ -104,7 +104,7 @@ class leoPowerAttEnv(gym.Env):
         reward = self._get_reward()
         self.reward_total += reward
         ob = self._get_state()
-        ob[2] = ob[2]/self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
+        ob[2] = ob[2] / self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
         ob[3] = ob[3] / self.power_max #    Normalize current power to fraction of total power
         #   If the wheel speeds get too large, end the episode.
         if ob[2] > 1:
