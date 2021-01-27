@@ -111,8 +111,8 @@ class leoPowerAttEnv(gym.Env):
             self.episode_over = True
             reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
-            print("Died from wheel explosion. RPMs were norm:"+str(ob[2])+", limit is "+str(3000*mc.RPM)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
-            print("Prior state was RPM:"+str(prev_ob[2])+" . body rate was:"+str(prev_ob[1]))
+            print("Died from wheel explosion. RPMs were norm:"+str(ob[2]*self.wheel_limit)+", limit is "+str(self.wheel_limit)+", body rate was "+str(ob[1])+"action taken was "+str(action)+", env step"+str(self.curr_step))
+            print("Prior state was RPM:"+str(prev_ob[2]*self.wheel_limit)+" . body rate was:"+str(prev_ob[1]))
 
 
         #   If we run out of power, end the episode.
@@ -120,7 +120,7 @@ class leoPowerAttEnv(gym.Env):
             self.episode_over = True
             reward -= self.failure_penalty
             self.reward_total -= self.failure_penalty
-            print("Ran out of power. Battery level at:"+str(ob[3])+", env step"+str(self.curr_step))
+            print("Ran out of power. Battery level was at at:"+str(prev_ob[3])+", env step"+str(self.curr_step-1))
 
         if self.sim_over:
             self.episode_over = True
@@ -181,7 +181,7 @@ class leoPowerAttEnv(gym.Env):
         self.episode_over = False
         self.curr_step = 0
         self.reward_total = 0
-
+        del(self.simulator) #   Force delete the sim to make sure nothing funky happens under the hood
         self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
         self.simulator_init = 1
         self.seed()
@@ -210,3 +210,31 @@ class leoPowerAttEnv(gym.Env):
         self.simulator_init = 1
 
         return self.simulator.obs
+
+if __name__=="__main__":
+    env = gym.make('leo_power_att_env-v0')
+    hist_list = []
+    #   Loop through the env twice
+    for ind in range(0,2):
+        hist = np.zeros([5,2*env.max_length])  
+        env.reset()
+        env.seed(seed=12345)
+        for step in range(0,env.max_length):
+            ob, reward, ep_over, info = env.step(0)
+            hist[:,step] = ob[:,0]
+            if ep_over:
+                break
+        hist_list.append(hist)
+
+    from matplotlib import pyplot as plt
+    for count,hist in enumerate(hist_list):
+        plt.figure()
+        plt.plot(range(0,env.max_length*2),hist[0,:],label='attitude norm')
+        plt.plot(range(0,env.max_length*2),hist[1,:],label='rate norm')
+        plt.plot(range(0,env.max_length*2),hist[2,:],label='Battery Level')
+        plt.plot(range(0,env.max_length*2),hist[3,:],label='wheel norm')
+        plt.plot(range(0,env.max_length*2),hist[4,:],label='Eclipse ind')
+        plt.grid()
+        plt.legend()
+        plt.title(f'History of run {count}')
+    plt.show()
