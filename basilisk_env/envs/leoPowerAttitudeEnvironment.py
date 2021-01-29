@@ -185,8 +185,10 @@ class leoPowerAttEnv(gym.Env):
         self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
         self.simulator_init = 1
         self.seed()
-
-        return self.simulator.obs
+        ob = copy.deepcopy(self.simulator.obs)
+        ob[2] = ob[2] / self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
+        ob[3] = ob[3] / self.power_max #    Normalize current power to fraction of total power
+        return ob
 
     def _render(self, mode='human', close=False):
         return
@@ -203,13 +205,15 @@ class leoPowerAttEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
 
-        initial_conditions = self.simulator.initial_conditions
+        initial_conditions = self.simulator.initial_conditions.
 
         self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions)
 
         self.simulator_init = 1
-
-        return self.simulator.obs
+        ob = copy.deepcopy(self.simulator.obs)
+        ob[2] = ob[2] / self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
+        ob[3] = ob[3] / self.power_max #    Normalize current power to fraction of total power
+        return ob
 
 if __name__=="__main__":
     env = gym.make('leo_power_att_env-v0')
