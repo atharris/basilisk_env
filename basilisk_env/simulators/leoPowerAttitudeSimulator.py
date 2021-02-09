@@ -501,12 +501,12 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         '''
 
         ##  Set the sampling time to the duration of a timestep:
-        samplingTime = mc.sec2nano(self.dynRate)
+        samplingTime = mc.sec2nano(self.step_duration)
 
         #   Log planet, sun positions
 
         #self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
-        self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
+        # self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
         #   Log inertial attitude, position
         self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
         self.TotalSim.logThisMessage(self.simpleNavObject.outputTransName,
@@ -518,7 +518,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         #   Log FSW error portrait
         self.TotalSim.logThisMessage("att_reference", samplingTime)
         self.TotalSim.logThisMessage(self.trackingErrorData.outputDataName, samplingTime)
-        self.TotalSim.logThisMessage(self.mrpFeedbackControlData.outputDataName, samplingTime)
+        # self.TotalSim.logThisMessage(self.mrpFeedbackControlData.outputDataName, samplingTime)
 
         #   Log system power status
         self.TotalSim.logThisMessage(self.powerMonitor.batPowerOutMsgName,
@@ -596,20 +596,29 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Pull logged message data and return it as an observation
         simDict = self.pullMultiMessageLogData([
-            'sun_planet_data.PositionVector',
-            self.scObject.scStateOutMsgName + '.sigma_BN',
+            # 'sun_planet_data.PositionVector',
+            # self.scObject.scStateOutMsgName + '.sigma_BN',
             self.scObject.scStateOutMsgName + '.r_BN_N',
-            self.scObject.scStateOutMsgName + '.v_BN_N',
+            # self.scObject.scStateOutMsgName + '.v_BN_N',
             "att_reference.sigma_RN",
             self.simpleNavObject.outputAttName + '.omega_BN_B',
             self.trackingErrorData.outputDataName + '.sigma_BR',
             self.rwStateEffector.OutputDataString + '.wheelSpeeds',
             self.powerMonitor.batPowerOutMsgName + '.storageLevel',
             self.solarPanel.sunEclipseInMsgName + '.shadowFactor'
-        ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)),
+        ], [
+            # list(range(3)), 
+            list(range(3)), 
+            # list(range(3)), 
+            # list(range(3)), 
+            list(range(3)), list(range(3)), list(range(3)), list(range(3)),
             list(range(1)), list(range(1))],
-            ['double','double','double', 'double','double','double', 'double','double','double', 'double'], 1)
+            [
+                # 'double','double','double', 
+                'double',
+            'double','double', 'double','double','double', 'double'], 1)
 
+        #   Observations
         attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
         attRef = simDict["att_reference.sigma_RN"]
         attRate = simDict[self.simpleNavObject.outputAttName + '.omega_BN_B']
@@ -617,16 +626,17 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
 
-        sunPosition = simDict['sun_planet_data.PositionVector']
-        inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
+        #   Debug info
+        # sunPosition = simDict['sun_planet_data.PositionVector']
+        # inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
         inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
-        inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
+        # inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
 
-        debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
+        # debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
         obs = np.hstack([np.linalg.norm(attErr[-1,1:4]), np.linalg.norm(attRate[-1,1:4]), np.linalg.norm(wheelSpeeds[-1,1:4]),
                          storedCharge[-1,1]/3600., eclipseIndicator[-1,1]])
         self.obs = obs.reshape(len(obs), 1)
-        self.sim_states = debug.reshape(len(debug), 1)
+        self.sim_states = []#debug.reshape(len(debug), 1)
 
         if np.linalg.norm(inertialPos[-1,1:4]) < (orbitalMotion.REQ_EARTH/1000.):
             self.sim_over = True
@@ -676,10 +686,10 @@ if __name__=="__main__":
     plt.legend()
 
 
-    plt.figure()
-    plt.plot(states[:, 3]/1000., states[:, 4]/1000., label="Orbit")
+    # plt.figure()
+    #plt.plot(states[:, 3]/1000., states[:, 4]/1000., label="Orbit")
     #plt.plot(states[:,12]/1000., states[:,13]/1000, label="Sun Position")
-    plt.legend()
+    # plt.legend()
 
     plt.show()
 

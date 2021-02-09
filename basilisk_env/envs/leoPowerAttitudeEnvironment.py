@@ -205,8 +205,8 @@ class leoPowerAttEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
 
-        initial_conditions = self.simulator.initial_conditions.
-
+        initial_conditions = self.simulator.initial_conditions
+        del(self.simulator)
         self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions)
 
         self.simulator_init = 1
