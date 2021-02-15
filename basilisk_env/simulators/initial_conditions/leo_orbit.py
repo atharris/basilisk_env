@@ -58,7 +58,6 @@ def coordinated_pass_2():
     oe_sc2.Omega = 150.0 * mc.D2R
     oe_sc2.omega = 345.0 * mc.D2R
     oe_sc2.f = 85.3 * mc.D2R
-
-   rN, vN = orbitalMotion.elem2rv(mu, oe_sc2)
+    rN, vN = orbitalMotion.elem2rv(mu, oe_sc2)
 
     return oe_sc2, rN, vN
