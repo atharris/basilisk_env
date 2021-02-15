@@ -41,6 +41,7 @@ def sampled_400km():
 def coordinated_pass_1():
     r_sc1 = (6378. + 500.) * 1000      # meters
     oe_sc1 = orbitalMotion.ClassicElements()
+    oe_sc1.a = r_sc1
     oe_sc1.e = 0.00001
     oe_sc1.i = 63.0 * mc.D2R
     oe_sc1.Omega = 165.0 * mc.D2R
@@ -53,6 +54,7 @@ def coordinated_pass_1():
 def coordinated_pass_2():
     r_sc2 = (6378. + 2000.) * 1000     # meters
     oe_sc2 = orbitalMotion.ClassicElements()
+    oe_sc2.a = r_sc2
     oe_sc2.e = 0.00001
     oe_sc2.i = 63.0 * mc.D2R
     oe_sc2.Omega = 150.0 * mc.D2R
