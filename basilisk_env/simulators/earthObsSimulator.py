@@ -673,7 +673,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
         eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
-        groundLocation = simDict[self.groundLocation.currentGroundStateOutMsgName+'.r_LP_N']
+        groundPosition = simDict[self.groundLocation.currentGroundStateOutMsgName+'.r_LP_N']
         hasAccess = simDict[self.groundLocation.accessOutMsgNames[-1]+'.hasAccess']
         elevationAngle=simDict[self.groundLocation.accessOutMsgNames[-1]+'.elevation']
 
@@ -695,7 +695,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         # inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
 
         # debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
-        obs = np.hstack([groundLocation[-1,1:4], inertialPos[-1,1:4], np.linalg.norm(attErr[-1,1:4]), np.linalg.norm(attRate[-1,1:4]), np.linalg.norm(wheelSpeeds[-1,1:4]),
+        obs = np.hstack([groundPosition[-1,1:4], inertialPos[-1,1:4], np.linalg.norm(attErr[-1,1:4]), np.linalg.norm(attRate[-1,1:4]), np.linalg.norm(wheelSpeeds[-1,1:4]),
                          storedCharge[-1,1]/3600., eclipseIndicator[-1,1], hadAccess, self.timeSinceImageCounters["0"],self.timeSinceImageCounters["1"]])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = []#debug.reshape(len(debug), 1)
