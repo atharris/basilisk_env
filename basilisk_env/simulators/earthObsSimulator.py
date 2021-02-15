@@ -109,7 +109,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.step_duration)))
         self.envTask = self.dynProc.addTask(self.CreateNewTask(self.envTaskName, mc.sec2nano(self.dynRate)))
 
-        self.obs = np.zeros([5,1])
+        self.obs = np.zeros([14,1])
         self.sim_states = np.zeros([11,1])
 
         self.set_env_dynamics()
@@ -389,12 +389,16 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
 
 
         self.sim_states[9,0] = self.powerMonitor.storedCharge_Init
-        self.obs[0,0] = np.linalg.norm(self.scObject.hub.sigma_BNInit)
-        self.obs[1,0] = np.linalg.norm(self.scObject.hub.omega_BN_BInit)
-        self.obs[2,0] = np.linalg.norm(initWheelSpeeds)
-        self.obs[3,0] = self.powerMonitor.storedCharge_Init/3600.0
-
-
+        self.obs[0:3,0] = rN 
+        self.obs[3:6] = self.groundLocation.r_LP_P_Init
+        self.obs[6,0] = np.linalg.norm(self.scObject.hub.sigma_BNInit)
+        self.obs[7,0] = np.linalg.norm(self.scObject.hub.omega_BN_BInit)
+        self.obs[8,0] = np.linalg.norm(initWheelSpeeds)
+        self.obs[9,0] = self.powerMonitor.storedCharge_Init/3600.0
+        self.obs[10,0] = 0
+        self.obs[11,0] = 0
+        self.obs[12,0] = 0
+        self.obs[13,0] = 0
 
         #   Add all the models to the dynamics task
         self.AddModelToTask(self.dynTaskName, self.scObject)
