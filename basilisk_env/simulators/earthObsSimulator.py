@@ -129,7 +129,11 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
 
     def set_ICs(self):
         # Sample orbital parameters
-        oe, rN,vN = leo_orbit.sampled_400km()
+        roll = np.random.uniform(0,1)
+        if roll<0.5:
+            oe, rN,vN = leo_orbit.coordinated_pass_1()
+        else:
+            oe, rN, vN = leo_orbit.coordinated_pass_2()
 
         # Sample attitude and rates
         sigma_init, omega_init = sc_attitudes.random_tumble(maxSpinRate=0.00001)
@@ -244,9 +248,10 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         self.groundLocation.minimumElevation = np.radians(10.)
         self.groundLocation.maximumRange = 1e16
 
-        self.AddModelToTask(self.spiceTaskName, self.gravFactory.spiceObject)
         self.AddModelToTask(self.dynTaskName, self.densityModel)
         self.AddModelToTask(self.dynTaskName, self.groundLocation)
+        self.AddModelToTask(self.dynTaskName, self.gravFactory.spiceObject)
+        
 
     def set_sc_dynamics(self):
         '''
@@ -558,7 +563,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         # self.TotalSim.logThisMessage(self.mrpFeedbackControlData.outputDataName, samplingTime)
         #   Log groundLocation position
         self.TotalSim.logThisMessage(self.groundLocation.currentGroundStateOutMsgName, samplingTime)
-        self.TotalSim.logThisMessage(self.groundLocation.accessOutMsgNames[-1],samplingTime)
+        self.TotalSim.logThisMessage(self.groundLocation.accessOutMsgNames[-1],mc.sec2nano(self.dynRate))
 
         #   Log system power status
         self.TotalSim.logThisMessage(self.powerMonitor.batPowerOutMsgName,
@@ -597,8 +602,6 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
 
             self.enableTask('nadirPointTask')
             self.enableTask('mrpControlTask')
-
-
 
         elif self.modeRequest == "2":
             #print('starting sun pointing...')
@@ -648,7 +651,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
             self.rwStateEffector.OutputDataString + '.wheelSpeeds',
             self.powerMonitor.batPowerOutMsgName + '.storageLevel',
             self.solarPanel.sunEclipseInMsgName + '.shadowFactor',
-            self.groundLocation.currentGroundStateOutMsgName + '.r_LP_N',
+            self.groundLocation.currentGroundStateOutMsgName + '.r_LN_N',
             self.groundLocation.accessOutMsgNames[-1]+'.hasAccess',
             self.groundLocation.accessOutMsgNames[-1]+'.elevation',
         ], [
@@ -673,7 +676,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
         eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
         wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
-        groundPosition = simDict[self.groundLocation.currentGroundStateOutMsgName+'.r_LP_N']
+        groundPosition = simDict[self.groundLocation.currentGroundStateOutMsgName+'.r_LN_N']
         hasAccess = simDict[self.groundLocation.accessOutMsgNames[-1]+'.hasAccess']
         elevationAngle=simDict[self.groundLocation.accessOutMsgNames[-1]+'.elevation']
 
@@ -685,7 +688,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
         else:
             hadAccess = 0
         #   If we successfully took an image...
-        if self.modeRequest == ("0" or "1") and hadAccess:
+        if (self.modeRequest == '0' or self.modeRequest == '1') and hadAccess:
             self.timeSinceImageCounters[self.modeRequest] = 0   #   Reset that counter
         
         #   Debug info
@@ -730,7 +733,7 @@ if __name__=="__main__":
 
     tFinal = 2*180
     for ind in range(0,tFinal):
-        act = randrange(4)
+        act = "1"
         actList.append(act)
         ob, state, _ = sim.run_sim(act)
         #normWheelSpeed.append(np.linalg.norm(abs(ob[3:6])))
