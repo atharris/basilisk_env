@@ -51,7 +51,7 @@ class EarthObsEnvironment(gym.Env):
         #   2 - sun pointing (power objective)
         #   3 - desaturation (required for long-term pointing)
 
-        self.action_space = spaces.Discrete(3)
+        self.action_space = spaces.Discrete(4)
 
         # Store what the agent tried
         self.curr_episode = -1
