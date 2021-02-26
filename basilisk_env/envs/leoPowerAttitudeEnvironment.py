@@ -33,7 +33,7 @@ class leoPowerAttEnv(gym.Env):
         #   Set some attributes for the simulator; parameterized such that they can be varied in-sim
         self.mass = 330.0 # kg
         self.powerDraw = -5. #  W
-        self.wheel_limit = 3000*mc.RPM # 3000 RPM in radians/s
+        self.wheel_limit = 3000.*mc.RPM # 3000 RPM in radians/s
         self.power_max = 20.0 # W/Hr
 
         #   Set up options, constants for this environment
@@ -92,7 +92,7 @@ class leoPowerAttEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, mass=self.mass, powerDraw = self.powerDraw)
+            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
             self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
@@ -199,15 +199,17 @@ class leoPowerAttEnv(gym.Env):
 
         return self.simulator.obs
 
-    def reset_init(self):
+    def reset_init(self, initial_conditions = None):
         self.action_episode_memory.append([])
         self.episode_over = False
         self.curr_step = 0
         self.reward_total = 0
 
-        initial_conditions = self.simulator.initial_conditions
+        if initial_conditions is None:
+            initial_conditions = self.simulator.initial_conditions
+            
         del(self.simulator)
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions)
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions=initial_conditions)
 
         self.simulator_init = 1
         ob = copy.deepcopy(self.simulator.obs)
