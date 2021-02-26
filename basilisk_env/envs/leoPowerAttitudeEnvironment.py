@@ -33,7 +33,7 @@ class leoPowerAttEnv(gym.Env):
         #   Set some attributes for the simulator; parameterized such that they can be varied in-sim
         self.mass = 330.0 # kg
         self.powerDraw = -5. #  W
-        self.wheel_limit = 3000*mc.RPM # 3000 RPM in radians/s
+        self.wheel_limit = 3000.*mc.RPM # 3000 RPM in radians/s
         self.power_max = 20.0 # W/Hr
 
         #   Set up options, constants for this environment
@@ -185,8 +185,12 @@ class leoPowerAttEnv(gym.Env):
         self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
         self.simulator_init = 1
         self.seed()
+        ob = self.simulator.obs
+        ob[2] = ob[2] / self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
+        ob[3] = ob[3] / self.power_max #    Normalize current power to fraction of total power
+        #   If the wheel speeds get too large, end the episode.
 
-        return self.simulator.obs
+        return ob
 
     def _render(self, mode='human', close=False):
         return
@@ -197,19 +201,24 @@ class leoPowerAttEnv(gym.Env):
 
         return self.simulator.obs
 
-    def reset_init(self):
+    def reset_init(self, initial_conditions = None):
         self.action_episode_memory.append([])
         self.episode_over = False
         self.curr_step = 0
         self.reward_total = 0
-
-        initial_conditions = self.simulator.initial_conditions
+        if initial_conditions is None:
+            initial_conditions = self.simulator.initial_conditions
+        
 
         self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions)
 
         self.simulator_init = 1
-
-        return self.simulator.obs
+        ob = self.simulator.obs
+        ob[2] = ob[2] / self.wheel_limit #    Normalize reaction wheel speed to fraction of limit
+        ob[3] = ob[3] / self.power_max #    Normalize current power to fraction of total power
+        #   If the wheel speeds get too large, end the episode.
+        print(f"Observation: {ob}")
+        return ob
 
 if __name__=="__main__":
     env = gym.make('leo_power_att_env-v0')

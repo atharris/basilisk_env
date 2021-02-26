@@ -38,3 +38,20 @@ def sampled_400km():
     rN, vN = orbitalMotion.elem2rv(mu, oe)
 
     return oe, rN, vN
+
+def inclined_400km():
+    """
+    Returns an elliptical, prograde LEO orbit with an SMA of 400km.
+    :return:
+    """
+    mu =  0.3986004415E+15
+    oe = orbitalMotion.ClassicElements()
+    oe.a = 6371 * 1000.0 + 500. * 1000
+    oe.e = 0.0001
+    oe.i = mc.D2R*45.
+    oe.Omega = mc.D2R * 45.
+    oe.omega = 0.0
+    oe.f = 0.0
+    rN, vN = orbitalMotion.elem2rv(mu, oe)
+
+    return oe, rN, vN
