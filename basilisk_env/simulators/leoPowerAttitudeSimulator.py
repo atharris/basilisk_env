@@ -1,3 +1,5 @@
+from time import sleep
+import random
 # 3rd party modules
 import numpy as np
 
@@ -214,8 +216,10 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.ModelTag = 'spacecraft'
 
         # clear prior gravitational body and SPICE setup definitions
+        sleep(random.randint(0,3))
         self.gravFactory = simIncludeGravBody.gravBodyFactory()
         # setup Spice interface for some solar system bodies
+
         timeInitString = '2021 MAY 04 07:47:48.965 (UTC)'
         self.gravFactory.createSpiceInterface(bskPath + '/supportData/EphemerisData/'
                                               , timeInitString
