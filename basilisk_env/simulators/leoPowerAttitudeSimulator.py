@@ -8,32 +8,31 @@ from Basilisk.utilities import SimulationBaseClass
 from Basilisk.utilities import macros as mc
 from Basilisk.utilities import unitTestSupport
 from Basilisk.utilities import orbitalMotion
-from Basilisk.simulation import sim_model
 
-from Basilisk.simulation import (spacecraftPlus, gravityEffector, extForceTorque, simple_nav, spice_interface,
-                                eclipse, imu_sensor, exponentialAtmosphere, facetDragDynamicEffector, planetEphemeris, reactionWheelStateEffector,
-                                 thrusterDynamicEffector)
-from Basilisk.simulation import simMessages
-from Basilisk.utilities import simIncludeRW, simIncludeGravBody, simIncludeThruster
-from Basilisk.utilities import RigidBodyKinematics as rbk
-from Basilisk.utilities import simulationArchTypes
+from Basilisk.simulation import (spacecraft, extForceTorque, simpleNav,
+                                 eclipse, exponentialAtmosphere, facetDragDynamicEffector)
+
+from Basilisk.utilities import simIncludeGravBody
+
 from Basilisk.simulation import simpleBattery, simplePowerSink, simpleSolarPanel
 from Basilisk import __path__
 bskPath = __path__[0]
 
-from Basilisk.fswAlgorithms import inertial3D, hillPoint, celestialTwoBodyPoint
+from Basilisk.fswAlgorithms import inertial3D, hillPoint
 from Basilisk.fswAlgorithms import attTrackingError
-from Basilisk.fswAlgorithms import MRP_Feedback, rwMotorTorque
-from Basilisk.fswAlgorithms import fswMessages
-from Basilisk.fswAlgorithms import inertialUKF
-from Basilisk.fswAlgorithms import thrMomentumManagement, thrMomentumDumping, thrForceMapping, thrFiringSchmitt
+from Basilisk.fswAlgorithms import mrpFeedback, rwMotorTorque
+
+
+from Basilisk.fswAlgorithms import thrMomentumManagement, thrMomentumDumping, thrForceMapping
 
 from basilisk_env.simulators.dynamics.effectorPrimatives import actuatorPrimatives as ap
 from basilisk_env.simulators.initial_conditions import leo_initial_conditions
-from numpy.random import uniform
+
+from Basilisk.architecture import messaging
+import Basilisk.architecture.cMsgCInterfacePy as cMsgPy
 
 class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
-    '''
+    """
     Simulates a spacecraft in LEO with atmospheric drag and J2.
 
     Dynamics Components
@@ -44,7 +43,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
     - Systems: SimpleBattery, SimpleSink, SimpleSolarPanel
 
     FSW Components:
-    - MRP_Feedback controller
+    - mrpFeedback controller
     - inertial3d (sun pointing), hillPoint (nadir pointing)
     - [WIP, not implemented] inertialEKF attitude filter
 
@@ -65,7 +64,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
     as the pointing error increases.
 
     :return:
-    '''
+    """
     def __init__(self, dynRate, fswRate, step_duration, initial_conditions=None):
         '''
         Creates the simulation, but does not initialize the initial conditions.
@@ -75,9 +74,20 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.step_duration = step_duration
 
         SimulationBaseClass.SimBaseClass.__init__(self)
-        self.TotalSim.terminateSimulation()
+
+        # define class variables that are assigned later on
+        self.attRefMsg = None
+        self.scRec = None
+        self.snTransRec = None
+        self.snAttRec = None
+        self.rwSpeedRec = None
+        self.attRefRec = None
+        self.attErrRec = None
+        self.powRec = None
+        self.powRec = None
 
         self.simTime = 0.0
+        self.sim_over = None
 
         # If no initial conditions are defined yet, set ICs
         if initial_conditions == None:
@@ -108,13 +118,14 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.sim_states = np.zeros([11,1])
 
         self.set_dynamics()
+        self.setupGatewayMsgs()
         self.set_fsw()
 
         self.set_logging()
         self.previousPointingGoal = "sunPointTask"
 
         self.modeRequest = None
-        self.InitializeSimulationAndDiscover()
+        self.InitializeSimulation()
 
         return
 
@@ -126,7 +137,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         return initial_conditions
 
     def set_dynamics(self):
-        '''
+        """
         Sets up the dynamics modules for the sim. This simulator runs:
         scObject (spacecraft dynamics simulation)
         SpiceObject
@@ -139,31 +150,33 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         By default, parameters are set to those for a 6U cubesat.
         :return:
-        '''
+        """
         sc_number=0
 
         #   Spacecraft, Planet Setup
-        self.scObject = spacecraftPlus.SpacecraftPlus()
+        self.scObject = spacecraft.Spacecraft()
         self.scObject.ModelTag = 'spacecraft'
 
         # clear prior gravitational body and SPICE setup definitions
         sleep(random.randint(0,3))
         self.gravFactory = simIncludeGravBody.gravBodyFactory()
+
+        self.gravFactory.createSun()
+        self.sun = 0
+        planet = self.gravFactory.createEarth()
+        self.earth = 1
+        planet.isCentralBody = True  # ensure this is the central gravitational body
+        mu = planet.mu
+        # attach gravity model to spaceCraftPlus
+        self.scObject.gravField.gravBodies = spacecraft.GravBodyVector(list(self.gravFactory.gravBodies.values()))
+
         # setup Spice interface for some solar system bodies
         timeInitString = '2021 MAY 04 07:47:48.965 (UTC)'
         self.gravFactory.createSpiceInterface(bskPath + '/supportData/EphemerisData/'
                                               , timeInitString
-                                              , spicePlanetNames=["sun", "earth"]
                                               )
 
-        self.gravFactory.spiceObject.zeroBase="earth" # Make sure that the Earth is the zero base
-
-        self.gravFactory.createSun()
-        planet = self.gravFactory.createEarth()
-        planet.isCentralBody = True  # ensure this is the central gravitational body
-        mu = planet.mu
-        # attach gravity model to spaceCraftPlus
-        self.scObject.gravField.gravBodies = spacecraftPlus.GravBodyVector(list(self.gravFactory.gravBodies.values()))
+        self.gravFactory.spiceObject.zeroBase = "earth"  # Make sure that the Earth is the zero base
 
         oe = self.initial_conditions.get("oe")
         rN = self.initial_conditions.get("rN")
@@ -198,7 +211,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.densityModel = exponentialAtmosphere.ExponentialAtmosphere()
         self.densityModel.ModelTag = "expDensity"
-        self.densityModel.addSpacecraftToModel(self.scObject.scStateOutMsgName)
+        self.densityModel.addSpacecraftToModel(self.scObject.scStateOutMsg)
         self.densityModel.planetRadius = self.initial_conditions.get("planetRadius")
         self.densityModel.baseDensity = self.initial_conditions.get("baseDensity")
         self.densityModel.scaleHeight = self.initial_conditions.get("scaleHeight")
@@ -214,12 +227,13 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.dragEffector.addFacet(1.*2., 2.2, [0,1,0],[0,2.,0])
         self.dragEffector.addFacet(1.*2., 2.2, [0,-1,0],[0,2.,0])
 
-        self.dragEffector.atmoDensInMsgName = self.densityModel.envOutMsgNames[-1]
+        self.dragEffector.atmoDensInMsg.subscribeTo(self.densityModel.envOutMsgs[-1])
         self.scObject.addDynamicEffector(self.dragEffector)
 
         self.eclipseObject = eclipse.Eclipse()
-        self.eclipseObject.addPositionMsgName(self.scObject.scStateOutMsgName)
-        self.eclipseObject.addPlanetName('earth')
+        self.eclipseObject.addSpacecraftToModel(self.scObject.scStateOutMsg)
+        self.eclipseObject.addPlanetToModel(self.gravFactory.spiceObject.planetStateOutMsgs[self.earth])
+        self.eclipseObject.sunInMsg.subscribeTo(self.gravFactory.spiceObject.planetStateOutMsgs[self.sun])
 
         #   Disturbance Torque Setup
         disturbance_magnitude = self.initial_conditions.get("disturbance_magnitude")
@@ -228,7 +242,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.extForceTorqueObject = extForceTorque.ExtForceTorque()
         self.extForceTorqueObject.extTorquePntB_B = disturbance_magnitude * disturbance_vector
         self.extForceTorqueObject.ModelTag = 'DisturbanceTorque'
-        self.extForceTorqueObject.cmdForceInertialInMsgName = 'disturbance_torque'
+        # self.extForceTorqueObject.cmdForceInertialInMsg = 'disturbance_torque'
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
@@ -238,45 +252,38 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         rwFactory.rwList["RW2"].Omega = self.initial_conditions.get("wheelSpeeds")[1]*mc.RPM #rad/s
         rwFactory.rwList["RW3"].Omega = self.initial_conditions.get("wheelSpeeds")[2]*mc.RPM #rad/s
         initWheelSpeeds = self.initial_conditions.get("wheelSpeeds")
-        self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
-        self.rwConfigMsgName = "rwConfig"
-        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.rwConfigMsgName, rwFactory.getConfigMessage(), msgStrName="RWArrayConfigFswMsg")
+        self.rwConfigMsg = rwFactory.getConfigMessage()
 
         #   Add thrusters to the spacecraft
         self.thrusterSet, thrFactory = ap.idealMonarc1Octet()
-        self.thrusterSet.InputCmds = "rwDesatTimeOnCmd"
         thrModelTag = "ACSThrusterDynamics"
-        self.thrusterConfigMsgName = "thrusterConfig"
-        unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.thrusterConfigMsgName, thrFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
+        self.thrusterConfigMsg = thrFactory.getConfigMessage()
         thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
 
         #   Add simpleNav as a mock estimator to the spacecraft
-        self.simpleNavObject = simple_nav.SimpleNav()
+        self.simpleNavObject = simpleNav.SimpleNav()
         self.simpleNavObject.ModelTag = 'SimpleNav'
-        self.simpleNavObject.inputStateName = self.scObject.scStateOutMsgName
+        self.simpleNavObject.scStateInMsg.subscribeTo(self.scObject.scStateOutMsg)
 
         #   Power Setup
         self.solarPanel = simpleSolarPanel.SimpleSolarPanel()
         self.solarPanel.ModelTag = 'solarPanel' + str(sc_number)
-        self.solarPanel.stateInMsgName = self.scObject.scStateOutMsgName
-        self.solarPanel.sunEclipseInMsgName = 'eclipse_data_'+str(sc_number)
-        self.solarPanel.sunInMsgName = 'sun_planet_data'
+        self.solarPanel.stateInMsg.subscribeTo(self.scObject.scStateOutMsg)
+        self.solarPanel.sunEclipseInMsg.subscribeTo(self.eclipseObject.eclipseOutMsgs[sc_number])
+        self.solarPanel.sunInMsg.subscribeTo(self.gravFactory.spiceObject.planetStateOutMsgs[self.sun])
         self.solarPanel.setPanelParameters(unitTestSupport.np2EigenVectorXd(self.initial_conditions.get("nHat_B")), self.initial_conditions.get("panelArea"), self.initial_conditions.get("panelEfficiency"))
-        self.solarPanel.nodePowerOutMsgName = "panelPowerMsg" + str(sc_number)
 
         self.powerSink = simplePowerSink.SimplePowerSink()
         self.powerSink.ModelTag = "powerSink" + str(sc_number)
         self.powerSink.nodePowerOut = self.powerDraw  # Watts
-        self.powerSink.nodePowerOutMsgName = "powerSinkMsg" + str(sc_number)
 
         self.powerMonitor = simpleBattery.SimpleBattery()
         self.powerMonitor.ModelTag = "powerMonitor"
-        self.powerMonitor.batPowerOutMsgName = "powerMonitorMsg"
         self.powerMonitor.storageCapacity = self.initial_conditions.get("storageCapacity")
         self.powerMonitor.storedCharge_Init = self.initial_conditions.get("storedCharge_Init")
-        self.powerMonitor.addPowerNodeToModel(self.solarPanel.nodePowerOutMsgName)
-        self.powerMonitor.addPowerNodeToModel(self.powerSink.nodePowerOutMsgName)
+        self.powerMonitor.addPowerNodeToModel(self.solarPanel.nodePowerOutMsg)
+        self.powerMonitor.addPowerNodeToModel(self.powerSink.nodePowerOutMsg)
 
         self.sim_states[9,0] = self.powerMonitor.storedCharge_Init
         self.obs[0,0] = np.linalg.norm(self.scObject.hub.sigma_BNInit)
@@ -303,24 +310,25 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
 
     def set_fsw(self):
-        '''
+        """
         Sets up the attitude guidance stack for the simulation. This simulator runs:
         inertial3Dpoint - Sets the attitude guidance objective to point the main panel at the sun.
         hillPointTask: Sets the attitude guidance objective to point a "camera" angle towards nadir.
         attitudeTrackingError: Computes the difference between estimated and guidance attitudes
         mrpFeedbackControl: Computes an appropriate control torque given an attitude error
+        rwDesatTask: desaturates the RW devices
         :return:
-        '''
+        """
 
         self.processName = self.DynamicsProcessName
         self.processTasksTimeStep = mc.sec2nano(self.fswRate)  # 0.5
-        self.dynProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep),taskPriority=100)
-        self.dynProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep),taskPriority=100)
+        self.dynProc.addTask(self.CreateNewTask("sunPointTask", self.processTasksTimeStep), taskPriority=100)
+        self.dynProc.addTask(self.CreateNewTask("nadirPointTask", self.processTasksTimeStep), taskPriority=100)
         self.dynProc.addTask(self.CreateNewTask("mrpControlTask", self.processTasksTimeStep), taskPriority=50)
         self.dynProc.addTask(self.CreateNewTask("rwDesatTask", self.processTasksTimeStep), taskPriority=100)
 
         #   Specify the vehicle configuration message to tell things what the vehicle inertia is
-        vehicleConfigOut = fswMessages.VehicleConfigFswMsg()
+        vehicleConfigOut = messaging.VehicleConfigMsgPayload()
         # use the same inertia in the FSW algorithm as in the simulation
         #   Set inertia properties to those of a solid 6U cubeoid:
         width = self.initial_conditions.get("width")
@@ -329,85 +337,77 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         I = [1. / 12. * self.mass * (width ** 2. + depth ** 2.), 0., 0.,
              0., 1. / 12. * self.mass * (depth ** 2. + height ** 2.), 0.,
              0., 0., 1. / 12. * self.mass * (width ** 2. + height ** 2.)]
-
         vehicleConfigOut.ISCPntB_B = I
-        unitTestSupport.setMessage(self.TotalSim,
-                                   self.DynamicsProcessName,
-                                   "adcs_config_data",
-                                   vehicleConfigOut)
-
+        # adcs_config_data -> vcConfigMsg
+        self.vcConfigMsg = messaging.VehicleConfigMsg().write(vehicleConfigOut)
 
         #   Sun pointing configuration
         self.sunPointData = inertial3D.inertial3DConfig()
         self.sunPointWrap = self.setModelDataWrap(self.sunPointData)
         self.sunPointWrap.ModelTag = "sunPoint"
-        self.sunPointData.outputDataName = "att_reference"
+        cMsgPy.AttRefMsg_C_addAuthor(self.sunPointData.attRefOutMsg, self.attRefMsg)
         self.sunPointData.sigma_R0N = self.initial_conditions.get("sigma_R0N")
 
         #   Earth pointing configuration
         self.hillPointData = hillPoint.hillPointConfig()
         self.hillPointWrap = self.setModelDataWrap(self.hillPointData)
         self.hillPointWrap.ModelTag = "hillPoint"
-        self.hillPointData.outputDataName = "att_reference"
-        self.hillPointData.inputNavDataName = self.simpleNavObject.outputTransName
-        self.hillPointData.inputCelMessName = self.gravFactory.gravBodies['earth'].bodyInMsgName
+        cMsgPy.AttRefMsg_C_addAuthor(self.hillPointData.attRefOutMsg, self.attRefMsg)
+        self.hillPointData.transNavInMsg.subscribeTo(self.simpleNavObject.transOutMsg)
+        self.hillPointData.celBodyInMsg.subscribeTo(self.gravFactory.spiceObject.planetStateOutMsgs[self.earth])
 
         #   Attitude error configuration
         self.trackingErrorData = attTrackingError.attTrackingErrorConfig()
         self.trackingErrorWrap = self.setModelDataWrap(self.trackingErrorData)
         self.trackingErrorWrap.ModelTag = "trackingError"
-        self.trackingErrorData.inputNavName = self.simpleNavObject.outputAttName
-        # Note: SimBase.DynModels.simpleNavObject.outputAttName = "simple_att_nav_output"
-        self.trackingErrorData.inputRefName = "att_reference"
-        self.trackingErrorData.outputDataName = "att_guidance"
+        self.trackingErrorData.attNavInMsg.subscribeTo(self.simpleNavObject.attOutMsg)
+        self.trackingErrorData.attRefInMsg.subscribeTo(self.attRefMsg)
+
+        #   Attitude controller configuration
+        self.mrpFeedbackControlData = mrpFeedback.mrpFeedbackConfig()
+        self.mrpFeedbackControlWrap = self.setModelDataWrap(self.mrpFeedbackControlData)
+        self.mrpFeedbackControlWrap.ModelTag = "mrpFeedbackControl"
+        self.mrpFeedbackControlData.guidInMsg.subscribeTo(self.trackingErrorData.attGuidOutMsg)
+        self.mrpFeedbackControlData.vehConfigInMsg.subscribeTo(self.vcConfigMsg)
+        self.mrpFeedbackControlData.K = self.initial_conditions.get("K")
+        self.mrpFeedbackControlData.Ki = self.initial_conditions.get("Ki")
+        self.mrpFeedbackControlData.P = self.initial_conditions.get("P")
+        self.mrpFeedbackControlData.integralLimit = 2. / self.mrpFeedbackControlData.Ki * 0.1
 
         # add module that maps the Lr control torque into the RW motor torques
         self.rwMotorTorqueConfig = rwMotorTorque.rwMotorTorqueConfig()
         self.rwMotorTorqueWrap = self.setModelDataWrap(self.rwMotorTorqueConfig)
         self.rwMotorTorqueWrap.ModelTag = "rwMotorTorque"
-        self.rwMotorTorqueConfig.outputDataName = self.rwStateEffector.InputCmds
-        self.rwMotorTorqueConfig.rwParamsInMsgName = "rwConfig"
-        self.rwMotorTorqueConfig.inputVehControlName = "commandedControlTorque"
+        self.rwStateEffector.rwMotorCmdInMsg.subscribeTo(self.rwMotorTorqueConfig.rwMotorTorqueOutMsg)
+        self.rwMotorTorqueConfig.rwParamsInMsg.subscribeTo(self.rwConfigMsg)
+        self.rwMotorTorqueConfig.vehControlInMsg.subscribeTo(self.mrpFeedbackControlData.cmdTorqueOutMsg)
         self.rwMotorTorqueConfig.controlAxes_B = self.initial_conditions.get("controlAxes_B")
-
-        #   Attitude controller configuration
-        self.mrpFeedbackControlData = MRP_Feedback.MRP_FeedbackConfig()
-        self.mrpFeedbackControlWrap = self.setModelDataWrap(self.mrpFeedbackControlData)
-        self.mrpFeedbackControlWrap.ModelTag = "mrpFeedbackControl"
-        self.mrpFeedbackControlData.inputGuidName = "att_guidance"
-        self.mrpFeedbackControlData.vehConfigInMsgName = "adcs_config_data"
-        self.mrpFeedbackControlData.outputDataName = self.rwMotorTorqueConfig.inputVehControlName
-        self.mrpFeedbackControlData.K = self.initial_conditions.get("K")
-        self.mrpFeedbackControlData.Ki = self.initial_conditions.get("Ki")
-        self.mrpFeedbackControlData.P = self.initial_conditions.get("P")
-        self.mrpFeedbackControlData.integralLimit = 2. / self.mrpFeedbackControlData.Ki * 0.1
+        self.rwStateEffector.rwMotorCmdInMsg.subscribeTo(self.rwMotorTorqueConfig.rwMotorTorqueOutMsg)
 
         #   Momentum dumping configuration
         self.thrDesatControlConfig = thrMomentumManagement.thrMomentumManagementConfig()
         self.thrDesatControlWrap = self.setModelDataWrap(self.thrDesatControlConfig)
         self.thrDesatControlWrap.ModelTag = "thrMomentumManagement"
         self.thrDesatControlConfig.hs_min = self.initial_conditions.get("hs_min")  # Nms
-        self.thrDesatControlConfig.rwSpeedsInMsgName = self.rwStateEffector.OutputDataString
-        self.thrDesatControlConfig.rwConfigDataInMsgName = self.rwConfigMsgName
-        self.thrDesatControlConfig.deltaHOutMsgName = "wheelDeltaH"
+        self.thrDesatControlConfig.rwSpeedsInMsg.subscribeTo(self.rwStateEffector.rwSpeedOutMsg)
+        self.thrDesatControlConfig.rwConfigDataInMsg.subscribeTo(self.rwConfigMsg)
 
         # setup the thruster force mapping module
         self.thrForceMappingConfig = thrForceMapping.thrForceMappingConfig()
         self.thrForceMappingWrap = self.setModelDataWrap(self.thrForceMappingConfig)
         self.thrForceMappingWrap.ModelTag = "thrForceMapping"
-        self.thrForceMappingConfig.inputVehControlName = self.thrDesatControlConfig.deltaHOutMsgName
-        self.thrForceMappingConfig.inputThrusterConfName = self.thrusterConfigMsgName
-        self.thrForceMappingConfig.inputVehicleConfigDataName = self.mrpFeedbackControlData.vehConfigInMsgName
-        self.thrForceMappingConfig.outputDataName = "delta_p_achievable"
+        self.thrForceMappingConfig.cmdTorqueInMsg.subscribeTo(self.thrDesatControlConfig.deltaHOutMsg)
+        self.thrForceMappingConfig.thrConfigInMsg.subscribeTo(self.thrusterConfigMsg)
+        self.thrForceMappingConfig.vehConfigInMsg.subscribeTo(self.vcConfigMsg)
         self.thrForceMappingConfig.controlAxes_B = self.initial_conditions.get("controlAxes_B")
         self.thrForceMappingConfig.thrForceSign = self.initial_conditions.get("thrForceSign")
 
         self.thrDumpConfig = thrMomentumDumping.thrMomentumDumpingConfig()
         self.thrDumpWrap = self.setModelDataWrap(self.thrDumpConfig)
-        self.thrDumpConfig.deltaHInMsgName = self.thrDesatControlConfig.deltaHOutMsgName
-        self.thrDumpConfig.thrusterImpulseInMsgName = "delta_p_achievable"
-        self.thrDumpConfig.thrusterOnTimeOutMsgName = self.thrusterSet.InputCmds
-        self.thrDumpConfig.thrusterConfInMsgName = self.thrusterConfigMsgName
+        self.thrDumpConfig.deltaHInMsg.subscribeTo(self.thrDesatControlConfig.deltaHOutMsg)
+        self.thrDumpConfig.thrusterImpulseInMsg.subscribeTo(self.thrForceMappingConfig.thrForceCmdOutMsg)
+        self.thrusterSet.cmdsInMsg.subscribeTo(self.thrDumpConfig.thrusterOnTimeOutMsg)
+        self.thrDumpConfig.thrusterConfInMsg.subscribeTo(self.thrusterConfigMsg)
         self.thrDumpConfig.maxCounterValue = self.initial_conditions.get("maxCounterValue")
         self.thrDumpConfig.thrMinFireTime = self.initial_conditions.get("thrMinFireTime")
 
@@ -423,62 +423,81 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask("rwDesatTask", self.thrForceMappingWrap, self.thrForceMappingConfig)
         self.AddModelToTask("rwDesatTask", self.thrDumpWrap, self.thrDumpConfig)
 
+    def setupGatewayMsgs(self):
+        """create C-wrapped gateway messages such that different modules can write to this message
+        and provide a common input msg for down-stream modules"""
+        self.attRefMsg = cMsgPy.AttRefMsg_C()
+
+        self.zeroGateWayMsgs()
+
+    def zeroGateWayMsgs(self):
+        """Zero all the FSW gateway message payloads"""
+        self.attRefMsg.write(messaging.AttRefMsgPayload())
 
     def set_logging(self):
-        '''
+        """
         Logs simulation outputs to return as observations. This simulator observes:
         mrp_bn - inertial to body MRP
         error_mrp - Attitude error given current guidance objective
         power_level - current W-Hr from the battery
         r_bn - inertial position of the s/c relative to Earth
         :return:
-        '''
+        """
 
-        ##  Set the sampling time to the duration of a timestep:
+        #  Set the sampling time to the duration of a timestep:
         samplingTime = mc.sec2nano(self.step_duration)
 
         #   Log planet, sun positions
+        # self.earthRec = self.gravFactory.spiceObject.planetStateOutMsgs[self.earth].recorder(samplingTime)
+        # self.sunRec = self.gravFactory.spiceObject.planetStateOutMsgs[self.sun].recorder(samplingTime)
+        # self.AddModelToTask(self.dynTaskName, self.earthRec)
+        # self.AddModelToTask(self.dynTaskName, self.sunRec)
 
-        #self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
-        # self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
         #   Log inertial attitude, position
-        self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
-        self.TotalSim.logThisMessage(self.simpleNavObject.outputTransName,
-                                               samplingTime)
-        self.TotalSim.logThisMessage(self.simpleNavObject.outputAttName,
-                                     samplingTime)
-        self.TotalSim.logThisMessage(self.rwStateEffector.OutputDataString,
-                                     samplingTime)
+        self.scRec = self.scObject.scStateOutMsg.recorder(samplingTime)
+        self.snTransRec = self.simpleNavObject.transOutMsg.recorder(samplingTime)
+        self.snAttRec = self.simpleNavObject.attOutMsg.recorder(samplingTime)
+        self.rwSpeedRec = self.rwStateEffector.rwSpeedOutMsg.recorder(samplingTime)
+
         #   Log FSW error portrait
-        self.TotalSim.logThisMessage("att_reference", samplingTime)
-        self.TotalSim.logThisMessage(self.trackingErrorData.outputDataName, samplingTime)
-        # self.TotalSim.logThisMessage(self.mrpFeedbackControlData.outputDataName, samplingTime)
+        self.attRefRec = self.attRefMsg.recorder(samplingTime)
+        self.attErrRec = self.trackingErrorData.attGuidOutMsg(samplingTime)
 
         #   Log system power status
-        self.TotalSim.logThisMessage(self.powerMonitor.batPowerOutMsgName,
-                                               samplingTime)
+        self.powRec = self.powerMonitor.batPowerOutMsg.recorder(samplingTime)
 
         #   Eclipse indicator
-        self.TotalSim.logThisMessage(self.solarPanel.sunEclipseInMsgName, samplingTime)
+        self.eclRec = self.solarPanel.sunEclipseInMsg.recorder(samplingTime)
 
         #   Desat debug parameters
-        #self.TotalSim.logThisMessage(self.thrDesatControlConfig.deltaHOutMsgName, samplingTime)
+        # self.desatRec = self.thrDesatControlConfig.deltaHOutMsg.recorder(samplingTime)
+        # self.AddModelToTask(self.dynTaskName, self.desatRec)
+
+        self.AddModelToTask(self.dynTaskName, self.scRec)
+        self.AddModelToTask(self.dynTaskName, self.snTransRec)
+        self.AddModelToTask(self.dynTaskName, self.snAttRec)
+        self.AddModelToTask(self.dynTaskName, self.rwSpeedRec)
+        self.AddModelToTask(self.dynTaskName, self.attRefRec)
+        self.AddModelToTask(self.dynTaskName, self.attErrRec)
+        self.AddModelToTask(self.dynTaskName, self.powRec)
+        self.AddModelToTask(self.dynTaskName, self.eclRec)
 
         return
 
     def run_sim(self, action):
-        '''
+        """
         Executes the sim for a specified duration given a mode command.
         :param action:
         :param duration:
         :return:
-        '''
+        """
 
         self.modeRequest = str(action)
 
         self.sim_over = False
 
         currentResetTime = mc.sec2nano(self.simTime)
+        self.zeroGateWayMsgs()
         if self.modeRequest == "0":
             #print('starting nadir pointing...')
             #   Set up a nadir pointing mode
@@ -553,26 +572,26 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
             'double','double', 'double','double','double', 'double'], 1)
 
         #   Observations
-        attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
-        attRef = simDict["att_reference.sigma_RN"]
-        attRate = simDict[self.simpleNavObject.outputAttName + '.omega_BN_B']
-        storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
-        eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
-        wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
+        attErr = self.attErrRec.sigma_BR
+        attRef = self.attRefRec.sigma_RN
+        attRate = self.snAttRec.omega_BN_B
+        storedCharge = self.powRec.storageLevel
+        eclipseIndicator = self.eclRec.shadowFactor
+        wheelSpeeds = self.rwSpeedRec.wheelSpeeds
 
         #   Debug info
-        # sunPosition = simDict['sun_planet_data.PositionVector']
-        # inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
-        inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
-        # inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
+        # sunPosition = self.sunRec.PositionVector
+        # inertialAtt = self.earthRec.PositionVector
+        inertialPos = self.scRec.r_BN_N
+        # inertialVel = self.scRec.v_BN_N
 
         # debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
-        obs = np.hstack([np.linalg.norm(attErr[-1,1:4]), np.linalg.norm(attRate[-1,1:4]), np.linalg.norm(wheelSpeeds[-1,1:4]),
-                         storedCharge[-1,1]/3600., eclipseIndicator[-1,1]])
+        obs = np.hstack([np.linalg.norm(attErr[-1]), np.linalg.norm(attRate[-1]), np.linalg.norm(wheelSpeeds[-1]),
+                         storedCharge[-1]/3600., eclipseIndicator[-1]])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = []#debug.reshape(len(debug), 1)
 
-        if np.linalg.norm(inertialPos[-1,1:4]) < (orbitalMotion.REQ_EARTH/1000.):
+        if np.linalg.norm(inertialPos[-1]) < (orbitalMotion.REQ_EARTH/1000.):
             self.sim_over = True
 
         return self.obs, self.sim_states, self.sim_over
