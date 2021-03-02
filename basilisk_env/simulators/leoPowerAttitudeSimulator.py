@@ -77,14 +77,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         # define class variables that are assigned later on
         self.attRefMsg = None
-        self.scRec = None
-        self.snTransRec = None
-        self.snAttRec = None
-        self.rwSpeedRec = None
-        self.attRefRec = None
-        self.attErrRec = None
-        self.powRec = None
-        self.powRec = None
 
         self.simTime = 0.0
         self.sim_over = None
@@ -214,6 +206,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.densityModel.planetRadius = self.initial_conditions.get("planetRadius")
         self.densityModel.baseDensity = self.initial_conditions.get("baseDensity")
         self.densityModel.scaleHeight = self.initial_conditions.get("scaleHeight")
+        self.densityModel.planetPosInMsg.subscribeTo(self.gravFactory.spiceObject.planetStateOutMsgs[self.earth])
 
         self.dragEffector = facetDragDynamicEffector.FacetDragDynamicEffector()
         #   Set up the goemetry of a 6U cubesat
@@ -245,7 +238,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.extForceTorqueObject = extForceTorque.ExtForceTorque()
         self.extForceTorqueObject.extTorquePntB_B = disturbance_magnitude * disturbance_vector
         self.extForceTorqueObject.ModelTag = 'DisturbanceTorque'
-        # self.extForceTorqueObject.cmdForceInertialInMsg = 'disturbance_torque'
         self.scObject.addDynamicEffector(self.extForceTorqueObject)
 
         # Add reaction wheels to the spacecraft
@@ -518,7 +510,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = []#debug.reshape(len(debug), 1)
 
-        if np.linalg.norm(inertialPos) < (orbitalMotion.REQ_EARTH/1000.):
+        if np.linalg.norm(inertialPos) < (orbitalMotion.REQ_EARTH * 1000.):
             self.sim_over = True
 
         return self.obs, self.sim_states, self.sim_over
