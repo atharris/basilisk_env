@@ -11,7 +11,7 @@ from Basilisk.utilities import orbitalMotion
 
 from Basilisk.simulation import (spacecraft, extForceTorque, simpleNav,
                                  eclipse, exponentialAtmosphere, facetDragDynamicEffector)
-
+from Basilisk.simulation import ephemerisConverter
 from Basilisk.utilities import simIncludeGravBody
 
 from Basilisk.simulation import simpleBattery, simplePowerSink, simpleSolarPanel
@@ -235,6 +235,10 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.eclipseObject.addPlanetToModel(self.gravFactory.spiceObject.planetStateOutMsgs[self.earth])
         self.eclipseObject.sunInMsg.subscribeTo(self.gravFactory.spiceObject.planetStateOutMsgs[self.sun])
 
+        self.ephemConverter = ephemerisConverter.EphemerisConverter()
+        self.ephemConverter.ModelTag = "ephemConverter"
+        self.ephemConverter.addSpiceInputMsg(self.gravFactory.spiceObject.planetStateOutMsgs[self.earth])
+
         #   Disturbance Torque Setup
         disturbance_magnitude = self.initial_conditions.get("disturbance_magnitude")
         disturbance_vector = self.initial_conditions.get("disturbance_vector")
@@ -354,7 +358,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.hillPointWrap.ModelTag = "hillPoint"
         cMsgPy.AttRefMsg_C_addAuthor(self.hillPointData.attRefOutMsg, self.attRefMsg)
         self.hillPointData.transNavInMsg.subscribeTo(self.simpleNavObject.transOutMsg)
-        self.hillPointData.celBodyInMsg.subscribeTo(self.gravFactory.spiceObject.planetStateOutMsgs[self.earth])
+        self.hillPointData.celBodyInMsg.subscribeTo(self.ephemConverter.ephemOutMsgs[0])
 
         #   Attitude error configuration
         self.trackingErrorData = attTrackingError.attTrackingErrorConfig()
@@ -461,7 +465,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Log FSW error portrait
         self.attRefRec = self.attRefMsg.recorder(samplingTime)
-        self.attErrRec = self.trackingErrorData.attGuidOutMsg(samplingTime)
+        self.attErrRec = self.trackingErrorData.attGuidOutMsg.recorder(samplingTime)
 
         #   Log system power status
         self.powRec = self.powerMonitor.batPowerOutMsg.recorder(samplingTime)
@@ -546,30 +550,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         #   Execute the sim
         self.ConfigureStopTime(simulationTime)
         self.ExecuteSimulation()
-
-        #   Pull logged message data and return it as an observation
-        simDict = self.pullMultiMessageLogData([
-            # 'sun_planet_data.PositionVector',
-            # self.scObject.scStateOutMsgName + '.sigma_BN',
-            self.scObject.scStateOutMsgName + '.r_BN_N',
-            # self.scObject.scStateOutMsgName + '.v_BN_N',
-            "att_reference.sigma_RN",
-            self.simpleNavObject.outputAttName + '.omega_BN_B',
-            self.trackingErrorData.outputDataName + '.sigma_BR',
-            self.rwStateEffector.OutputDataString + '.wheelSpeeds',
-            self.powerMonitor.batPowerOutMsgName + '.storageLevel',
-            self.solarPanel.sunEclipseInMsgName + '.shadowFactor'
-        ], [
-            # list(range(3)), 
-            list(range(3)), 
-            # list(range(3)), 
-            # list(range(3)), 
-            list(range(3)), list(range(3)), list(range(3)), list(range(3)),
-            list(range(1)), list(range(1))],
-            [
-                # 'double','double','double', 
-                'double',
-            'double','double', 'double','double','double', 'double'], 1)
 
         #   Observations
         attErr = self.attErrRec.sigma_BR

@@ -1,6 +1,6 @@
 from Basilisk.simulation import thrusterDynamicEffector, reactionWheelStateEffector
 from Basilisk.utilities import simIncludeThruster, simIncludeRW
-from Basilisk.utilities import fswSetupThrusters, fswSetupRW
+
 from Basilisk.utilities import macros as mc
 from numpy.random import uniform
 
@@ -12,7 +12,6 @@ def balancedHR16Triad(useRandom = False, randomBounds = (-400,400)):
         @return thrusterFac: factory containing defined thrusters
     """
     rwFactory = simIncludeRW.rwFactory()
-    varRWModel = rwFactory.BalancedWheels
     if useRandom:
 
         wheelSpeeds = uniform(randomBounds[0],randomBounds[1],3)
@@ -21,40 +20,34 @@ def balancedHR16Triad(useRandom = False, randomBounds = (-400,400)):
                               , [1, 0, 0]
                               , maxMomentum=50.
                               , Omega=wheelSpeeds[0]  # RPM
-                              , RWModel=varRWModel
                               )
         RW2 = rwFactory.create('Honeywell_HR16'
                                , [0, 1, 0]
                                , maxMomentum=50.
                                , Omega=wheelSpeeds[1]  # RPM
-                               , RWModel=varRWModel
                                )
         RW3 = rwFactory.create('Honeywell_HR16'
                                , [0, 0, 1]
                                , maxMomentum=50.
                                , Omega=wheelSpeeds[2] # RPM
-                               , RWModel=varRWModel
                                )
     else:
         RW1 = rwFactory.create('Honeywell_HR16'
                                , [1, 0, 0]
                                , maxMomentum=50.
                                , Omega=500.  # RPM
-                               , RWModel=varRWModel
                                )
         RW2 = rwFactory.create('Honeywell_HR16'
                                , [0, 1, 0]
                                , maxMomentum=50.
                                , Omega=500.  # RPM
 
-                               , RWModel=varRWModel
                                )
         RW3 = rwFactory.create('Honeywell_HR16'
                                , [0, 0, 1]
                                , maxMomentum=50.
                                , Omega=500.  # RPM
                                , rWB_B=[0.5, 0.5, 0.5]  # meters
-                               , RWModel=varRWModel
                                )
         wheelSpeeds = [500,500,500]
     numRW = rwFactory.getNumOfDevices()
