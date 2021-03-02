@@ -121,7 +121,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.setupGatewayMsgs()
         self.set_fsw()
 
-        self.set_logging()
         self.previousPointingGoal = "sunPointTask"
 
         self.modeRequest = None
@@ -438,56 +437,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         """Zero all the FSW gateway message payloads"""
         self.attRefMsg.write(messaging.AttRefMsgPayload())
 
-    def set_logging(self):
-        """
-        Logs simulation outputs to return as observations. This simulator observes:
-        mrp_bn - inertial to body MRP
-        error_mrp - Attitude error given current guidance objective
-        power_level - current W-Hr from the battery
-        r_bn - inertial position of the s/c relative to Earth
-        :return:
-        """
-
-        #  Set the sampling time to the duration of a timestep:
-        samplingTime = mc.sec2nano(self.step_duration)
-
-        #   Log planet, sun positions
-        # self.earthRec = self.gravFactory.spiceObject.planetStateOutMsgs[self.earth].recorder(samplingTime)
-        # self.sunRec = self.gravFactory.spiceObject.planetStateOutMsgs[self.sun].recorder(samplingTime)
-        # self.AddModelToTask(self.dynTaskName, self.earthRec)
-        # self.AddModelToTask(self.dynTaskName, self.sunRec)
-
-        #   Log inertial attitude, position
-        self.scRec = self.scObject.scStateOutMsg.recorder(samplingTime)
-        self.snTransRec = self.simpleNavObject.transOutMsg.recorder(samplingTime)
-        self.snAttRec = self.simpleNavObject.attOutMsg.recorder(samplingTime)
-        self.rwSpeedRec = self.rwStateEffector.rwSpeedOutMsg.recorder(samplingTime)
-
-        #   Log FSW error portrait
-        self.attRefRec = self.attRefMsg.recorder(samplingTime)
-        self.attErrRec = self.trackingErrorData.attGuidOutMsg.recorder(samplingTime)
-
-        #   Log system power status
-        self.powRec = self.powerMonitor.batPowerOutMsg.recorder(samplingTime)
-
-        #   Eclipse indicator
-        self.eclRec = self.solarPanel.sunEclipseInMsg.recorder(samplingTime)
-
-        #   Desat debug parameters
-        # self.desatRec = self.thrDesatControlConfig.deltaHOutMsg.recorder(samplingTime)
-        # self.AddModelToTask(self.dynTaskName, self.desatRec)
-
-        self.AddModelToTask(self.dynTaskName, self.scRec)
-        self.AddModelToTask(self.dynTaskName, self.snTransRec)
-        self.AddModelToTask(self.dynTaskName, self.snAttRec)
-        self.AddModelToTask(self.dynTaskName, self.rwSpeedRec)
-        self.AddModelToTask(self.dynTaskName, self.attRefRec)
-        self.AddModelToTask(self.dynTaskName, self.attErrRec)
-        self.AddModelToTask(self.dynTaskName, self.powRec)
-        self.AddModelToTask(self.dynTaskName, self.eclRec)
-
-        return
-
     def run_sim(self, action):
         """
         Executes the sim for a specified duration given a mode command.
@@ -552,26 +501,24 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.ExecuteSimulation()
 
         #   Observations
-        attErr = self.attErrRec.sigma_BR
-        attRef = self.attRefRec.sigma_RN
-        attRate = self.snAttRec.omega_BN_B
-        storedCharge = self.powRec.storageLevel
-        eclipseIndicator = self.eclRec.shadowFactor
-        wheelSpeeds = self.rwSpeedRec.wheelSpeeds
+        attErr = self.trackingErrorData.attGuidOutMsg.read().sigma_BR
+        attRate = self.simpleNavObject.attOutMsg.read().omega_BN_B
+        storedCharge = self.powerMonitor.batPowerOutMsg.read().storageLevel
+        eclipseIndicator = self.eclipseObject.eclipseOutMsgs[0].read().shadowFactor
+        wheelSpeeds = self.rwStateEffector.rwSpeedOutMsg.read().wheelSpeeds
 
         #   Debug info
-        # sunPosition = self.sunRec.PositionVector
-        # inertialAtt = self.earthRec.PositionVector
-        inertialPos = self.scRec.r_BN_N
-        # inertialVel = self.scRec.v_BN_N
+        # sunPosition = self.gravFactory.spiceObject.planetStateOutMsgs[self.sun].read().PositionVector
+        # inertialAtt = self.gravFactory.spiceObject.planetStateOutMsgs[self.earth].read().PositionVector
+        inertialPos = self.scObject.scStateOutMsg.read().r_BN_N
+        # inertialVel = self.scObject.scStateOutMsg.read().v_BN_N
 
-        # debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4], sunPosition[-1,1:4]])
-        obs = np.hstack([np.linalg.norm(attErr[-1]), np.linalg.norm(attRate[-1]), np.linalg.norm(wheelSpeeds[-1]),
-                         storedCharge[-1]/3600., eclipseIndicator[-1]])
+        obs = np.hstack([np.linalg.norm(attErr), np.linalg.norm(attRate), np.linalg.norm(wheelSpeeds),
+                         storedCharge/3600., eclipseIndicator])
         self.obs = obs.reshape(len(obs), 1)
         self.sim_states = []#debug.reshape(len(debug), 1)
 
-        if np.linalg.norm(inertialPos[-1]) < (orbitalMotion.REQ_EARTH/1000.):
+        if np.linalg.norm(inertialPos) < (orbitalMotion.REQ_EARTH/1000.):
             self.sim_over = True
 
         return self.obs, self.sim_states, self.sim_over
