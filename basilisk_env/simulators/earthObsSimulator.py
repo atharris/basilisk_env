@@ -429,7 +429,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
                                                 saveFile=fileName
                                                 ,
                                                 )  
-        vizSupport.addLocation(viz, stationName="Boulder Station"
+        vizSupport.addLocation(self.vizInterface, stationName="Boulder Station"
                            , parentBodyName='earth'
                            , r_GP_P=self.groundLocation.r_LP_P_Init
                            , fieldOfView=np.radians(160.)
