@@ -6,7 +6,7 @@ import numpy as np
 #   Basilisk modules
 from Basilisk.utilities import SimulationBaseClass
 from Basilisk.utilities import macros as mc
-from Basilisk.utilities import unitTestSupport
+from Basilisk.utilities import unitTestSupport, vizSupport
 from Basilisk.utilities import orbitalMotion
 
 from Basilisk.simulation import (spacecraft, extForceTorque, simpleNav,
@@ -65,7 +65,7 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
     :return:
     """
-    def __init__(self, dynRate, fswRate, step_duration, initial_conditions=None):
+    def __init__(self, dynRate, fswRate, step_duration, initial_conditions=None, render=False):
         '''
         Creates the simulation, but does not initialize the initial conditions.
         '''
@@ -111,6 +111,8 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         self.set_dynamics()
         self.setupGatewayMsgs()
+        if render:
+            self.setup_viz()
         self.set_fsw()
 
         self.previousPointingGoal = "sunPointTask"
@@ -303,6 +305,19 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
 
         return
 
+    def setup_viz(self):
+        """
+        Initializes a vizSupport instance and logs all RW/thruster/spacecraft state messages.
+        """
+        from datetime import datetime
+        fileName = f'leo_power_att_env-v1_{datetime.today()}'
+
+        self.vizInterface = vizSupport.enableUnityVisualization(self, self.dynTaskName, self.scObject,
+                                                rwEffectorList = self.rwStateEffector, 
+                                                thrEffectorList = self.thrusterSet,
+                                                saveFile=fileName
+                                              ,
+                                              )            
 
     def set_fsw(self):
         """
@@ -530,7 +545,7 @@ if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-    sim = LEOPowerAttitudeSimulator(0.1,1.0, 60.)
+    sim = LEOPowerAttitudeSimulator(0.1,1.0, 60.,render=True)
     obs = []
     states = []
     normWheelSpeed = []
