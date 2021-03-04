@@ -4,7 +4,7 @@ import numpy as np
 #   Basilisk modules
 from Basilisk.utilities import SimulationBaseClass
 from Basilisk.utilities import macros as mc
-from Basilisk.utilities import unitTestSupport
+from Basilisk.utilities import unitTestSupport, vizSupport
 from Basilisk.utilities import orbitalMotion
 
 from Basilisk.simulation import (spacecraft, groundLocation, extForceTorque, simpleNav, spiceInterface,
@@ -69,7 +69,7 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
 
     :return:
     """
-    def __init__(self, dynRate, fswRate, step_duration, initial_conditions=None):
+    def __init__(self, dynRate, fswRate, step_duration, initial_conditions=None, render=False):
         '''
         Creates the simulation, but does not initialize the initial conditions.
         '''
@@ -118,6 +118,8 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
 
         self.set_sc_dynamics()
         self.setupGatewayMsgs()
+        if render:
+            self.setup_viz()
         self.set_fsw()
 
         self.set_logging()
@@ -414,6 +416,30 @@ class EarthObsSimulator(SimulationBaseClass.SimBaseClass):
 
         return
 
+    def setup_viz(self):
+        """
+        Initializes a vizSupport instance and logs all RW/thruster/spacecraft state messages.
+        """
+        from datetime import datetime
+        fileName = f'earth_obs_env-v1_{datetime.today()}'
+
+        self.vizInterface = vizSupport.enableUnityVisualization(self, self.dynTaskName, self.scObject,
+                                                rwEffectorList = self.rwStateEffector, 
+                                                thrEffectorList = self.thrusterSet,
+                                                saveFile=fileName
+                                                ,
+                                                )  
+        vizSupport.addLocation(viz, stationName="Boulder Station"
+                           , parentBodyName='earth'
+                           , r_GP_P=self.groundLocation.r_LP_P_Init
+                           , fieldOfView=np.radians(160.)
+                           , color='pink'
+                           , range=1000.0*1000  # meters
+                           )
+        self.vizInterface.settings.spacecraftSizeMultiplier = 1.5
+        self.vizInterface.settings.showLocationCommLines = 1
+        self.vizInterface.settings.showLocationCones = 1
+        self.vizInterface.settings.showLocationLabels = 1
 
     def set_fsw(self):
         """
@@ -674,7 +700,7 @@ if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-    sim = create_simulator()
+    sim = EarthObsSimulator(0.1,1.0,60.,render=True)
     obs = []
     states = []
     normWheelSpeed = []
