@@ -84,7 +84,7 @@ def reasonable_400km_leo_smallsat_tumble():
     oe, rN,vN = leo_orbit.inclined_400km()
 
     # Sample attitude and rates
-    sigma_init, omega_init = sc_attitudes.random_tumble(maxSpinRate=0.000001)
+    sigma_init, omega_init = sc_attitudes.static_inertial()
 
     # Dict of initial conditions
     initial_conditions = {

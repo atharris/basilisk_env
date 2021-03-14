@@ -151,7 +151,6 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.ModelTag = 'spacecraft'
 
         # clear prior gravitational body and SPICE setup definitions
-        sleep(random.randint(0,3))
         self.gravFactory = simIncludeGravBody.gravBodyFactory()
 
         self.gravFactory.createSun()
@@ -163,8 +162,11 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         # attach gravity model to spaceCraftPlus
         self.scObject.gravField.gravBodies = spacecraft.GravBodyVector(list(self.gravFactory.gravBodies.values()))
 
+        sleep(random.uniform(0,5))
         # setup Spice interface for some solar system bodies
         timeInitString = '2021 MAY 04 07:47:48.965 (UTC)'
+        
+        sleep(random.randrange(0,7))
         self.gravFactory.createSpiceInterface(bskPath + '/supportData/EphemerisData/'
                                               , timeInitString
                                               )
