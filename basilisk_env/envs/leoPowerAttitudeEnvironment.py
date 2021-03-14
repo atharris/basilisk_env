@@ -191,6 +191,7 @@ class leoPowerAttEnv(gym.Env):
         return ob
 
     def _render(self, mode='human', close=False):
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(0.1, 1.0, self.step_duration, render=True)
         return
 
     def _get_state(self):
