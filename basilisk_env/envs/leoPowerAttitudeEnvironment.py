@@ -44,6 +44,7 @@ class leoPowerAttEnv(gym.Env):
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(5,1))
         self.obs = np.zeros([5,])
+        self.render = False #   Should the env save off results?
 
         ##  Action Space description
         #   0 - earth pointing (mission objective)
@@ -92,7 +93,7 @@ class leoPowerAttEnv(gym.Env):
         """
 
         if self.simulator_init == 0:
-            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+            self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, render=self.render)
             self.simulator_init = 1
 
         if self.curr_step >= self.max_length:
@@ -182,7 +183,7 @@ class leoPowerAttEnv(gym.Env):
         self.curr_step = 0
         self.reward_total = 0
         del(self.simulator) #   Force delete the sim to make sure nothing funky happens under the hood
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration)
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, render=self.render)
         self.simulator_init = 1
         self.seed()
         ob = copy.deepcopy(self.simulator.obs)
@@ -191,7 +192,8 @@ class leoPowerAttEnv(gym.Env):
         return ob
 
     def _render(self, mode='human', close=False):
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(0.1, 1.0, self.step_duration, render=True)
+        self.render=True
+        #self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(0.1, 1.0, self.step_duration, render=True)
         return
 
     def _get_state(self):
@@ -210,7 +212,7 @@ class leoPowerAttEnv(gym.Env):
             initial_conditions = self.simulator.initial_conditions
             
         del(self.simulator)
-        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions=initial_conditions)
+        self.simulator = leoPowerAttitudeSimulator.LEOPowerAttitudeSimulator(.1, 1.0, self.step_duration, initial_conditions=initial_conditions, render=self.render)
 
         self.simulator_init = 1
         ob = copy.deepcopy(self.simulator.obs)

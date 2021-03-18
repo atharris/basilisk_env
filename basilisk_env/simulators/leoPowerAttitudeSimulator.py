@@ -168,8 +168,13 @@ class LEOPowerAttitudeSimulator(SimulationBaseClass.SimBaseClass):
         
         sleep(random.randrange(0,7))
         self.gravFactory.createSpiceInterface(bskPath + '/supportData/EphemerisData/'
-                                              , timeInitString
-                                              )
+                                              , timeInitString,
+                                              spiceKernalFileNames=[
+                                                  'de421.bsp', #    Use a smaller kernel to minimize file conflicts
+                                                  'naif0012.tls',
+                                                  'de-403-masses.tpc', 
+                                                  'pck00010.tpc'
+                                              ])
 
         self.gravFactory.spiceObject.zeroBase = "earth"  # Make sure that the Earth is the zero base
 
