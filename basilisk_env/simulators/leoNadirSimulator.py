@@ -40,31 +40,39 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
     - Environment: Exponential density model; eclipse
     - Actuators: ExternalForceTorque
     - Sensors: SimpleNav
-    - Systems: SimpleBattery, SimpleSink, SimpleSolarPanel
+    - Power System: SimpleBattery, SimpleSink, SimpleSolarPanel
+    - Data Management System: spaceToGroundTransmitter, simpleStorageUnit, simpleInstrument
 
     FSW Components:
     - MRP_Feedback controller
     - inertial3d (sun pointing), hillPoint (nadir pointing)
-    - [WIP, not implemented] inertialEKF attitude filter
+    - Desat
 
     Action Space (discrete, 0 or 1):
-    0 - orients the spacecraft towards the sun.
-    1 - orients the spacecraft towards Earth.
-    [WIP, not implemented] 2 - Runs inertialEKF to better estimate the spacecraft state.
+    0 - Imaging mode
+    1 - Charging mode
+    2 - Desat mode
+    3 - Downlink mode
 
     Observation Space:
-    eclipseIndicator - float [0,1] - indicates the flux mitigator due to eclipse.
-    storedCharge - float [0,batCapacity] - indicates the s/c battery charge level in W-s.
-    |sigma_RB| - float [0,1] - norm of the spacecraft error MRP with respect to the last reference frame specified.
-    |diag(filter_covar)| - float - norm of the diagonal of the EKF covariance matrix at that time.
+    Inertial position and velocity - indices 0-5
+    Attitude error and attitude rate - indices 6-7
+    Reaction wheel speeds - indices 8-11
+    Battery charge - indices 12
+    Eclipse indicator - indices 13
+    Stored data onboard spacecraft - indices 14
+    Data transmitted over interval - indices 15
+    Amount of time ground stations were accessible (s) - 16-22
+    Percent through planning interval - 23
 
     Reward Function:
-    r = 1/(1+ | sigma_RB|) if action=1
-    Intended to provide a rich reward in action 1 when the spacecraft is pointed towards the earth, decaying as sigma^2
-    as the pointing error increases.
+    r = +1 for each MB downlinked and no failure
+    r = +1 for each MB downlinked and no failure and +1 if t > t_max
+    r = - 1000 if failure (battery drained, buffer overflow, reaction wheel speeds over max)
 
     :return:
     '''
+
     def __init__(self, dynRate, fswRate, step_duration, initial_conditions=None):
         '''
         Creates the simulation, but does not initialize the initial conditions.
@@ -72,8 +80,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.dynRate = dynRate
         self.fswRate = fswRate
 
-        self.general_step_duration = step_duration
-        self.desat_step_duration = 2*step_duration
+        self.step_duration = 2*step_duration
 
         SimulationBaseClass.SimBaseClass.__init__(self)
         self.TotalSim.terminateSimulation()
@@ -90,15 +97,13 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.DynModels = []
         self.FSWModels = []
 
-        #   Initialize the dynamics+fsw task groups, modules
-
-        self.DynamicsProcessName = 'DynamicsProcess' #Create simulation process name
-        self.dynProc = self.CreateNewProcess(self.DynamicsProcessName) #Create process
+        #   Initialize the dynamics and fsw task groups and modules
+        self.DynamicsProcessName = 'DynamicsProcess' # Create simulation process name
+        self.dynProc = self.CreateNewProcess(self.DynamicsProcessName) # Create process
         self.dynTaskName = 'DynTask'
         self.spiceTaskName = 'SpiceTask'
         self.envTaskName = 'EnvTask'
         self.dynTask = self.dynProc.addTask(self.CreateNewTask(self.dynTaskName, mc.sec2nano(self.dynRate)))
-        # self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(step_duration/20)))
         self.spiceTask = self.dynProc.addTask(self.CreateNewTask(self.spiceTaskName, mc.sec2nano(self.dynRate)))
         self.envTask = self.dynProc.addTask(self.CreateNewTask(self.envTaskName, mc.sec2nano(self.dynRate)))
 
@@ -126,7 +131,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
     def set_ICs(self):
         # Sample orbital parameters
-        oe, rN,vN = leo_orbit.sampled_400km_boulder_gs()
+        oe, rN,vN = leo_orbit.sampled_500km_boulder_gs()
 
         # Sample attitude and rates
         sigma_init, omega_init = sc_attitudes.random_tumble(maxSpinRate=0.00001)
@@ -177,8 +182,8 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             "rwElecToMechEfficiency": 0.5,
 
             # Battery Parameters
-            "batteryStorageCapacity": 20.0 * 3600.,
-            "storedCharge_Init": np.random.uniform(5.*3600., 10.*3600., 1)[0],
+            "batteryStorageCapacity": 80.0 * 3600.,
+            "storedCharge_Init": np.random.uniform(30.*3600., 50.*3600., 1)[0],
 
             # Sun pointing FSW config
             "sigma_R0N": [1,0,0],
@@ -345,10 +350,6 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.scObject.hub.sigma_BNInit = sigma_init  # sigma_BN_B
         self.scObject.hub.omega_BN_BInit = omega_init
 
-        # self.sim_states[0:3,0] = np.asarray(self.scObject.hub.sigma_BNInit).flatten()
-        # self.sim_states[3:6,0] = np.asarray(self.scObject.hub.r_CN_NInit).flatten()
-        # self.sim_states[6:9,0] = np.asarray(self.scObject.hub.v_CN_NInit).flatten()
-
         self.densityModel = exponentialAtmosphere.ExponentialAtmosphere()
         self.densityModel.ModelTag = "expDensity"
         self.densityModel.addSpacecraftToModel(self.scObject.scStateOutMsgName)
@@ -389,10 +390,6 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
         # Add reaction wheels to the spacecraft
         self.rwStateEffector, rwFactory, initWheelSpeeds = ap.balancedHR16Triad(useRandom=False, randomBounds=(-800,800), wheelSpeeds=self.initial_conditions.get("wheelSpeeds"))
-        # Change the wheel speeds
-        # rwFactory.rwList["RW1"].Omega = self.initial_conditions.get("wheelSpeeds")[0]*mc.RPM  # rad/s
-        # rwFactory.rwList["RW2"].Omega = self.initial_conditions.get("wheelSpeeds")[1]*mc.RPM  # rad/s
-        # rwFactory.rwList["RW3"].Omega = self.initial_conditions.get("wheelSpeeds")[2]*mc.RPM  # rad/s
         self.rwStateEffector.InputCmds = "rwTorqueCommand"
         rwFactory.addToSpacecraft("ReactionWheels", self.rwStateEffector, self.scObject)
         self.rwConfigMsgName = "rwConfig"
@@ -409,7 +406,6 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         #   Add simpleNav as a mock estimator to the spacecraft
         self.simpleNavObject = simple_nav.SimpleNav()
         self.simpleNavObject.ModelTag = 'SimpleNav'
-        # self.simpleNavObject.walkBounds = sim model.DoubleVector(errorBounds):
         self.simpleNavObject.inputStateName = self.scObject.scStateOutMsgName
 
         #   Power setup
@@ -573,16 +569,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.transmitter.addAccessMsgToTransmitter(self.dongaraGroundStation.accessOutMsgNames[-1])
         self.transmitter.addAccessMsgToTransmitter(self.hawaiiGroundStation.accessOutMsgNames[-1])
 
-        # print("Access Name Boulder: ", self.boulderGroundStation.accessOutMsgNames[-1])
-        # print("Access Name Merritt: ", self.merrittGroundStation.accessOutMsgNames[-1])
-        # print("Access Name Singapore: ", self.singaporeGroundStation.accessOutMsgNames[-1])
-        # print("Access Name Weilheim: ", self.weilheimGroundStation.accessOutMsgNames[-1])
-        # print("Access Name Santiago: ", self.santiagoGroundStation.accessOutMsgNames[-1])
-        # print("Access Name Dongara: ", self.dongaraGroundStation.accessOutMsgNames[-1])
-        # print("Access Name Hawaii: ", self.hawaiiGroundStation.accessOutMsgNames[-1])
-
         # Create a partitionedStorageUnit and attach the instrument to it
-        # self.storageUnit = partitionedStorageUnit.PartitionedStorageUnit()
         self.storageUnit = simpleStorageUnit.SimpleStorageUnit()
         self.storageUnit.ModelTag = "storageUnit" + str(sc_number)
         self.storageUnit.storageUnitDataOutMsgName = "storageUnit" + str(sc_number)
@@ -643,6 +630,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         # Add all the models to the tasks
         # Spice Task
         self.AddModelToTask(self.spiceTaskName, self.gravFactory.spiceObject, ModelPriority=1100)
+
         # Dyn Task
         self.AddModelToTask(self.dynTaskName, self.densityModel, ModelPriority=1000)
         self.AddModelToTask(self.dynTaskName, self.dragEffector, ModelPriority=999)
@@ -650,6 +638,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask(self.dynTaskName, self.rwStateEffector, ModelPriority=997)
         self.AddModelToTask(self.dynTaskName, self.thrusterSet, ModelPriority=996)
         self.AddModelToTask(self.dynTaskName, self.scObject, ModelPriority=899)
+
         # Env Task
         self.AddModelToTask(self.envTaskName, self.boulderGroundStation, ModelPriority=995)
         self.AddModelToTask(self.envTaskName, self.merrittGroundStation, ModelPriority=994)
@@ -667,9 +656,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask(self.envTaskName, self.transmitter, ModelPriority=798)
         self.AddModelToTask(self.envTaskName, self.storageUnit, ModelPriority=699)
 
-
         return
-
 
     def set_fsw(self):
         '''
@@ -786,6 +773,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Add models to tasks
         self.AddModelToTask("sunPointTask", self.sunPointWrap, self.sunPointData, ModelPriority=1200)
+
         self.AddModelToTask("nadirPointTask", self.hillPointWrap, self.hillPointData, ModelPriority=1199)
 
         self.AddModelToTask("mrpControlTask", self.mrpFeedbackControlWrap, self.mrpFeedbackControlData,
@@ -797,7 +785,6 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.AddModelToTask("rwDesatTask", self.thrForceMappingWrap, self.thrForceMappingConfig, ModelPriority=1194)
         self.AddModelToTask("rwDesatTask", self.thrDumpWrap, self.thrDumpConfig, ModelPriority=1193)
 
-
     def set_logging(self):
         '''
         Logs simulation outputs to return as observations. This simulator observes:
@@ -808,24 +795,11 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         :return:
         '''
 
-        ##  Set the sampling time to the duration of a timestep:
+        # Set the sampling time to the duration of a timestep:
         samplingTime = mc.sec2nano(self.dynRate)
 
-        #   Log planet, sun positions
-
-        #self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
-        # self.TotalSim.logThisMessage("sun_planet_data", samplingTime)
         #   Log inertial attitude, position
         self.TotalSim.logThisMessage(self.scObject.scStateOutMsgName, samplingTime)
-
-        # # Total rotational angular momentum
-        # self.AddVariableForLogging(self.scObject.ModelTag + ".totRotAngMomPntC_N", self.dynRate, 0, 2)
-        # # Sum of forces about body
-        # self.AddVariableForLogging(self.scObject.ModelTag + ".sumForceExternal_B", self.dynRate, 0, 2)
-        # # Drag effector torque
-        # self.AddVariableForLogging(self.dragEffector.ModelTag + ".torqueExternalPntB_B", self.dynRate, 0, 2)
-        # # Sum of torques about body
-        # self.AddVariableForLogging(self.scObject.ModelTag + ".sumTorquePntB_B", self.dynRate, 0, 2)
 
         # RW power
         for c in range(0,3):
@@ -838,7 +812,6 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.TotalSim.logThisMessage(self.rwStateEffector.OutputDataString,
                                      samplingTime)
         #   Log FSW error portrait
-        # self.TotalSim.logThisMessage("att_reference", samplingTime)
         self.TotalSim.logThisMessage(self.trackingErrorData.outputDataName, samplingTime)
         self.TotalSim.logThisMessage(self.mrpFeedbackControlData.outputDataName, samplingTime)
 
@@ -848,9 +821,6 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
         #   Eclipse indicator
         self.TotalSim.logThisMessage(self.solarPanel.sunEclipseInMsgName, samplingTime)
-
-        #   Desat debug parameters
-        #self.TotalSim.logThisMessage(self.thrDesatControlConfig.deltaHOutMsgName, samplingTime)
 
         # Storage Unit, Transmitter, and Ground Station messages
         self.TotalSim.logThisMessage(self.boulderGroundStation.accessOutMsgNames[-1], samplingTime)
@@ -862,6 +832,10 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.TotalSim.logThisMessage(self.hawaiiGroundStation.accessOutMsgNames[-1], samplingTime)
         self.TotalSim.logThisMessage(self.storageUnit.storageUnitDataOutMsgName, samplingTime)
         self.TotalSim.logThisMessage(self.transmitter.nodeDataOutMsgName, samplingTime)
+
+        self.TotalSim.logThisMessage("earth_planet_data", samplingTime)
+
+        self.TotalSim.logThisMessage(self.boulderGroundStation.currentGroundStateOutMsgName, samplingTime)
 
         return
 
@@ -879,8 +853,9 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.sim_over = False
 
         currentResetTime = mc.sec2nano(self.simTime)
+
+        # Imaging mode
         if self.modeRequest == "0":
-            # Set up a nadir pointing mode
             self.dynProc.enableAllTasks()
             self.hillPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
@@ -897,9 +872,8 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             self.enableTask('nadirPointTask')
             self.enableTask('mrpControlTask')
 
+        # Battery charging mode
         elif self.modeRequest == "1":
-            #print('starting sun pointing...')
-            #   Set up a sun pointing mode
             self.dynProc.enableAllTasks()
             self.sunPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
@@ -916,8 +890,8 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             self.enableTask('sunPointTask')
             self.enableTask('mrpControlTask')
 
+        # Desaturation mode
         elif self.modeRequest == "2":
-            #   Set up a desat mode
             self.dynProc.enableAllTasks()
             self.sunPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
@@ -938,8 +912,8 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             self.enableTask('mrpControlTask')
             self.enableTask('rwDesatTask')
 
+        # Downlink mode
         elif self.modeRequest == "3":
-            # Set up a downlink mode
             self.dynProc.enableAllTasks()
             self.hillPointWrap.Reset(currentResetTime)
             self.trackingErrorWrap.Reset(currentResetTime)
@@ -956,18 +930,9 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             self.enableTask('nadirPointTask')
             self.enableTask('mrpControlTask')
 
-        # Here we change the step size based on the mode
-        # If we are desaturating, run for twice the amount of time
-        if self.modeRequest == "2":
-            step_duration = self.desat_step_duration
-            self.simTime += step_duration
-            simulation_time = mc.sec2nano(self.simTime)
-        # Otherwise, take the standard step
-        else:
-            step_duration = self.general_step_duration
-            self.simTime += step_duration
-            simulation_time = mc.sec2nano(self.simTime)
-
+        # Increment time and the current step
+        self.simTime += self.step_duration
+        simulation_time = mc.sec2nano(self.simTime)
         self.curr_step += 1
 
         #   Execute the sim
@@ -975,9 +940,8 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.ExecuteSimulation()
 
         if return_obs:
-
-            # Pull final observations for some of the states
-            simDict = self.pullMultiMessageLogData([
+            # Pull observations for the final state in the mode
+            simDict_single = self.pullMultiMessageLogData([
                 self.scObject.scStateOutMsgName + '.r_BN_N',
                 self.scObject.scStateOutMsgName + '.v_BN_N',
                 self.simpleNavObject.outputAttName + '.omega_BN_B',
@@ -985,85 +949,56 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
                 self.rwStateEffector.OutputDataString + '.wheelSpeeds',
                 self.powerMonitor.batPowerOutMsgName + '.storageLevel',
                 self.solarPanel.sunEclipseInMsgName + '.shadowFactor',
-                self.storageUnit.storageUnitDataOutMsgName + '.storageLevel'
+                self.storageUnit.storageUnitDataOutMsgName + '.storageLevel',
+                "earth_planet_data.J20002Pfix",
+                self.boulderGroundStation.currentGroundStateOutMsgName+'.r_LP_N'
             ], [list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(3)), list(range(1)),
-                list(range(1)), list(range(1))],
-                ['double','double','double', 'double','double','double', 'double','double','double', 'double', 'double'], 1)
+                list(range(1)), list(range(1)), list(range(9)), list(range(3))],
+                ['double','double','double', 'double','double','double', 'double','double','double', 'double', 'double', 'double', 'double'], 1)
 
-            # Pull the transmitter messages separately (more messages to pull due to summation)
-            simDict2 = self.pullMultiMessageLogData([
-                self.transmitter.nodeDataOutMsgName + '.baudRate'],
-                [list(range(1))],
-                ['double'],
-                int(step_duration/self.dynRate))
-
-            # print("Number of Logs: ", int(step_duration/self.dynRate))
-
-            # Pull the ground station access times
-            simDict3 = self.pullMultiMessageLogData([
+            # Pull the ground station access times and transmitter baudRate over the entire step
+            simDict_full = self.pullMultiMessageLogData([
                 self.boulderGroundStation.accessOutMsgNames[-1] + '.hasAccess',
                 self.merrittGroundStation.accessOutMsgNames[-1] + '.hasAccess',
                 self.singaporeGroundStation.accessOutMsgNames[-1] + '.hasAccess',
                 self.weilheimGroundStation.accessOutMsgNames[-1] + '.hasAccess',
                 self.santiagoGroundStation.accessOutMsgNames[-1] + '.hasAccess',
                 self.dongaraGroundStation.accessOutMsgNames[-1] + '.hasAccess',
-                self.hawaiiGroundStation.accessOutMsgNames[-1] + '.hasAccess'],
+                self.hawaiiGroundStation.accessOutMsgNames[-1] + '.hasAccess',
+                self.transmitter.nodeDataOutMsgName + '.baudRate'],
                 [list(range(1)), list(range(1)), list(range(1)), list(range(1)), list(range(1)),
-                 list(range(1)), list(range(1))],
-                ['int', 'int', 'int', 'int', 'int', 'int', 'int'],
-                int(step_duration/self.dynRate))
+                 list(range(1)), list(range(1)), list(range(1))],
+                ['int', 'int', 'int', 'int', 'int', 'int', 'int', 'double'],
+                int(self.step_duration/self.dynRate))
 
+            # Compute the relevant state variables
+            attErr = simDict_single[self.trackingErrorData.outputDataName + '.sigma_BR']
+            attRate = simDict_single[self.simpleNavObject.outputAttName + '.omega_BN_B']
+            storedCharge = simDict_single[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
+            storedData = simDict_single[self.storageUnit.storageUnitDataOutMsgName + '.storageLevel']
+            accessIndicator1 = simDict_full[self.boulderGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            accessIndicator2 = simDict_full[self.merrittGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            accessIndicator3 = simDict_full[self.singaporeGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            accessIndicator4 = simDict_full[self.weilheimGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            accessIndicator5 = simDict_full[self.santiagoGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            accessIndicator6 = simDict_full[self.dongaraGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            accessIndicator7 = simDict_full[self.hawaiiGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            transmitterBaud = simDict_full[self.transmitter.nodeDataOutMsgName + '.baudRate']
+            eclipseIndicator = simDict_single[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
+            wheelSpeeds = simDict_single[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
 
-            attErr = simDict[self.trackingErrorData.outputDataName + '.sigma_BR']
-            # attRef = simDict["att_reference.sigma_RN"]
-            attRate = simDict[self.simpleNavObject.outputAttName + '.omega_BN_B']
-            storedCharge = simDict[self.powerMonitor.batPowerOutMsgName + '.storageLevel']
-            # Stored data on-board the spacecraft
-            storedData = simDict[self.storageUnit.storageUnitDataOutMsgName + '.storageLevel']
-            # Ground station access indicator
-            accessIndicator1 = simDict3[self.boulderGroundStation.accessOutMsgNames[-1]+'.hasAccess']
-            accessIndicator2 = simDict3[self.merrittGroundStation.accessOutMsgNames[-1]+'.hasAccess']
-            accessIndicator3 = simDict3[self.singaporeGroundStation.accessOutMsgNames[-1]+'.hasAccess']
-            accessIndicator4 = simDict3[self.weilheimGroundStation.accessOutMsgNames[-1]+'.hasAccess']
-            accessIndicator5 = simDict3[self.santiagoGroundStation.accessOutMsgNames[-1]+'.hasAccess']
-            accessIndicator6 = simDict3[self.dongaraGroundStation.accessOutMsgNames[-1]+'.hasAccess']
-            accessIndicator7 = simDict3[self.hawaiiGroundStation.accessOutMsgNames[-1]+'.hasAccess']
+            # Get the rotation matrix from the inertial to planet frame from SPICE
+            dcm_PN = np.array(simDict_single["earth_planet_data.J20002Pfix"][0][1:10]).reshape((3,3))
 
-            # accessIndicator1 = self.pullMessageLogData(self.boulderGroundStation.accessOutMsgNames[-1]+'.hasAccess')
-            # accessIndicator2 = self.pullMessageLogData(self.merrittGroundStation.accessOutMsgNames[-1]+'.hasAccess')
-            # accessIndicator3 = self.pullMessageLogData(self.singaporeGroundStation.accessOutMsgNames[-1]+'.hasAccess')
-            # accessIndicator4 = self.pullMessageLogData(self.weilheimGroundStation.accessOutMsgNames[-1]+'.hasAccess')
-            # accessIndicator5 = self.pullMessageLogData(self.singaporeGroundStation.accessOutMsgNames[-1]+'.hasAccess')
-            # accessIndicator6 = self.pullMessageLogData(self.dongaraGroundStation.accessOutMsgNames[-1]+'.hasAccess')
-            # accessIndicator7 = self.pullMessageLogData(self.hawaiiGroundStation.accessOutMsgNames[-1]+'.hasAccess')
+            # Get inertial position and velocity, rotate to planet-fixed frame
+            inertialPos = simDict_single[self.scObject.scStateOutMsgName + '.r_BN_N']
+            inertialVel = simDict_single[self.scObject.scStateOutMsgName + '.v_BN_N']
+            planetFixedPos = np.matmul(dcm_PN, inertialPos[-1][1:4])
+            planetFixedVel = np.matmul(dcm_PN, inertialVel[-1][1:4])
 
-            # Transmitter baud during the step
-            # data = baudRate*dt, baudRate=0 if not transmitting, apply eqn in obs hstack below
-            transmitterBaud = simDict2[self.transmitter.nodeDataOutMsgName + '.baudRate']
-            # print("Baud Rate Sum: ", np.sum(transmitterBaud[:, -1]))
-            # print(transmitterBaud[:,-1])
-            eclipseIndicator = simDict[self.solarPanel.sunEclipseInMsgName + '.shadowFactor']
-            wheelSpeeds = simDict[self.rwStateEffector.OutputDataString+'.wheelSpeeds']
-
-            # sunPosition = simDict['sun_planet_data.PositionVector']
-            # inertialAtt = simDict[self.scObject.scStateOutMsgName + '.sigma_BN']
-            inertialPos = simDict[self.scObject.scStateOutMsgName + '.r_BN_N']
-            inertialVel = simDict[self.scObject.scStateOutMsgName + '.v_BN_N']
-
-            # debug = np.hstack([inertialAtt[-1,1:4],inertialPos[-1,1:4],inertialVel[-1,1:4],attRef[-1,1:4],
-            #                    sunPosition[-1,1:4]])
-
-            # Observations, all rounded to five decimals:
-            # Inertial position and velocity: 0-5
-            # Attitude error and attitude rate, normalized: 6-7
-            # Reaction wheel speeds: 8-11
-            # Battery charge: 12
-            # Eclipse indicator: 13
-            # Stored data onboard spacecraft: 14
-            # Data transmitted: 15
-            # Amount of time ground stations were accessible (s): 16-22
-            obs_full = np.hstack(np.around([inertialPos[-1, 1], inertialPos[-1, 2], inertialPos[-1, 3], inertialVel[-1, 1],
-                inertialVel[-1, 2], inertialVel[-1, 3], np.linalg.norm(attErr[-1, 1:4]),
+            # Full observations (non-normalized), all rounded to five decimals
+            obs_full = np.hstack(np.around([planetFixedPos[0], planetFixedPos[1], planetFixedPos[2],
+                planetFixedVel[0], planetFixedVel[1], planetFixedVel[2], np.linalg.norm(attErr[-1, 1:4]),
                 np.linalg.norm(attRate[-1, 1:4]), wheelSpeeds[-1, 1], wheelSpeeds[-1, 2], wheelSpeeds[-1, 3],
                 storedCharge[-1, 1]/3600., eclipseIndicator[-1, 1], storedData[-1, 1],
                 np.sum(transmitterBaud[:, -1])*self.dynRate/8E6, np.sum(accessIndicator1[:, 1]),
@@ -1076,33 +1011,33 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
             transmitterBaudRate = self.initial_conditions.get("transmitterBaudRate")
             batteryStorageCapacity = self.initial_conditions.get("batteryStorageCapacity")
             dataStorageCapacity = self.initial_conditions.get("dataStorageCapacity")
-            # print(self.curr_step)
-            # print(self.max_steps)
-            obs_norm = np.hstack(np.around([inertialPos[-1, 1]/np.linalg.norm(inertialPos[-1, 1:4]),
-                inertialPos[-1, 2]/np.linalg.norm(inertialPos[-1, 1:4]),
-                inertialPos[-1, 3]/np.linalg.norm(inertialPos[-1, 1:4]),
-                inertialVel[-1, 1]/np.linalg.norm(inertialVel[-1, 1:4]),
-                inertialVel[-1, 2]/np.linalg.norm(inertialVel[-1, 1:4]),
-                inertialVel[-1, 3]/np.linalg.norm(inertialVel[-1, 1:4]),
+
+            # Normalized observations, all rounded to five decimals
+            obs_norm = np.hstack(np.around([planetFixedPos[0]/np.linalg.norm(planetFixedPos[0:3]),
+                planetFixedPos[1]/np.linalg.norm(planetFixedPos[0:3]),
+                planetFixedPos[2]/np.linalg.norm(planetFixedPos[0:3]),
+                planetFixedVel[0]/np.linalg.norm(planetFixedVel[0:3]),
+                planetFixedVel[1]/np.linalg.norm(planetFixedVel[0:3]),
+                planetFixedVel[2]/np.linalg.norm(planetFixedVel[0:3]),
                 np.linalg.norm(attErr[-1, 1:4]), np.linalg.norm(attRate[-1, 1:4]), wheelSpeeds[-1, 1]/(6000*mc.RPM),
                 wheelSpeeds[-1, 2]/(6000*mc.RPM), wheelSpeeds[-1, 3]/(6000*mc.RPM),
                 storedCharge[-1, 1]/batteryStorageCapacity, eclipseIndicator[-1, 1],
                 storedData[-1, 1]/dataStorageCapacity,
-                np.sum(transmitterBaud[:, -1])*self.dynRate/(transmitterBaudRate*step_duration),
-                np.sum(accessIndicator1[:, 1])*self.dynRate/step_duration,
-                np.sum(accessIndicator2[:, 1])*self.dynRate/step_duration,
-                np.sum(accessIndicator3[:, 1])*self.dynRate/step_duration,
-                np.sum(accessIndicator4[:, 1])*self.dynRate/step_duration,
-                np.sum(accessIndicator5[:, 1])*self.dynRate/step_duration,
-                np.sum(accessIndicator6[:, 1])*self.dynRate/step_duration,
-                np.sum(accessIndicator7[:, 1])*self.dynRate/step_duration, self.simTime/(self.max_length*60)],
+                np.sum(transmitterBaud[:, -1])*self.dynRate/(transmitterBaudRate*self.step_duration),
+                np.sum(accessIndicator1[:, 1])*self.dynRate/self.step_duration,
+                np.sum(accessIndicator2[:, 1])*self.dynRate/self.step_duration,
+                np.sum(accessIndicator3[:, 1])*self.dynRate/self.step_duration,
+                np.sum(accessIndicator4[:, 1])*self.dynRate/self.step_duration,
+                np.sum(accessIndicator5[:, 1])*self.dynRate/self.step_duration,
+                np.sum(accessIndicator6[:, 1])*self.dynRate/self.step_duration,
+                np.sum(accessIndicator7[:, 1])*self.dynRate/self.step_duration, self.simTime/(self.max_length*60)],
                                            decimals=5))
 
-            obs_norm = obs_norm.reshape(len(obs_norm), 1)
+            # Reshape and assign the observations
             self.obs_full = obs_full.reshape(len(obs_full), 1)
+            self.obs = obs_norm.reshape(len(obs_norm), 1)
 
-            self.obs = obs_norm
-
+            # Check if crashed into Earth
             if np.linalg.norm(inertialPos[-1,1:4]) < (orbitalMotion.REQ_EARTH/1000.):
                 self.sim_over = True
 
@@ -1123,14 +1058,11 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
 
         return
 
-def create_leoPowerAttSimulator():
-    return LEONadirSimulator(0.1, 0.1, 60.)
-
 if __name__=="__main__":
     """
     Test execution of the simulator with random actions and plot the observation space.
     """
-    sim = LEONadirSimulator(0.1,1.0, 60.)
+    sim = LEONadirSimulator(0.1, 1.0, 60.)
     obs = []
     states = []
     normWheelSpeed = []
@@ -1160,7 +1092,6 @@ if __name__=="__main__":
 
     plt.figure()
     plt.plot(states[:, 3]/1000., states[:, 4]/1000., label="Orbit")
-    #plt.plot(states[:,12]/1000., states[:,13]/1000, label="Sun Position")
     plt.legend()
 
     plt.show()

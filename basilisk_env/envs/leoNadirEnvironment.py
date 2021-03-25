@@ -23,8 +23,8 @@ class leoNadirEnv(gym.Env):
         print("Basilisk Attitude Mode Management Sim - Version {}".format(self.__version__))
 
         # General variables defining the environment
-        self.max_length = int(3*180) # Specify the maximum number of minutes
-        self.max_steps = 0
+        self.max_length = int(270) # Specify the maximum number of minutes
+        self.max_steps = 45
 
         #   Tell the environment that it doesn't have a sim attribute...
         self.simulator_init = 0
@@ -35,25 +35,18 @@ class leoNadirEnv(gym.Env):
         self.initial_conditions = None
 
         # Set the dynRate for the env, which is passed into the simulator
-        self.dynRate = 0.1
+        self.dynRate = 1.0
         self.fswRate = 1.0
 
         #   Set up options, constants for this environment
-        self.step_duration = 180.  # seconds, tune as desired
-        self.reward_mult = 0.99
-        # self.failure_penalty = 1000 #    Default is 50.
-        self.failure_penalty = 0.0 #    Default is 50.
+        self.step_duration = 6*60. # seconds, tune as desired
+        self.reward_mult = 1.0
+        self.failure_penalty = 1000
         low = -1e16
         high = 1e16
         self.observation_space = spaces.Box(low, high,shape=(23,1))
         self.obs = np.zeros([23,1])
         self.obs_full = np.zeros([23,1])
-
-        ##  Action Space description
-        #   0 - Earth Pointing (point at Earth to take images)
-        #   1 - sun pointing (point at the sun to charge battery)
-        #   2 - desaturation (point at the sun and desaturate reaction wheels)
-        #   3 - Downlink (downlink collected imagery to ground station)
 
         self.action_space = spaces.Discrete(4)
 
@@ -101,22 +94,16 @@ class leoNadirEnv(gym.Env):
             self.simulator = leoNadirSimulator.LEONadirSimulator(self.dynRate, self.fswRate, self.step_duration)
             self.simulator_init = 1
 
-        # if self.curr_step >= self.max_length:
-        #     self.episode_over = True
-
         # If the simTime in minutes is greater than the planning interval in minutes, end the sim
         if (self.simulator.simTime/60) >= self.max_length:
             print("End of simulation reached", self.simulator.simTime/60)
             self.episode_over = True
 
-        # prev_ob = self._get_state()
         prev_ob = self.obs_full
         self._take_action(action, return_obs)
 
         # If we want to return observations, do the following
         if return_obs:
-            # reward = self._get_reward()
-            # self.reward_total += reward
             reward = 0
             ob = self._get_state()
 
@@ -128,13 +115,15 @@ class leoNadirEnv(gym.Env):
                 self.reward_total -= self.failure_penalty
                 print("Died from wheel explosion. RPMs were norm:"+self.obs_full[8:10]+", limit is "+str(6000*mc.RPM)+", body rate was "+str(self.obs_full[7])+"action taken was "+str(action)+", env step"+str(self.curr_step))
                 print("Prior state was RPM:"+prev_ob[8:10]+" . body rate was:"+str(prev_ob[7]))
+
             #   If we run out of power, end the episode.
             elif self.obs_full[11] == 0:
                 self.failure = True
                 self.episode_over = True
                 reward -= self.failure_penalty
                 self.reward_total -= self.failure_penalty
-                print("Ran out of power. Battery level at:"+str(self.obs_full[11])+", env step"+str(self.curr_step))
+                print("Ran out of power. Battery level at: "+str(self.obs_full[11])+", env step "+str(self.curr_step)+" action taken was "+str(action))
+
             #   If we overflow the buffer, end the episode.
             elif self.obs_full[13] >= self.simulator.storageUnit.storageCapacity:
                 self.failure = True
@@ -142,12 +131,13 @@ class leoNadirEnv(gym.Env):
                 reward -= self.failure_penalty
                 self.reward_total -= self.failure_penalty
                 print("Data buffer overflow. Data storage level at:"+str(self.obs_full[13])+", env step"+str(self.curr_step))
+
             elif self.sim_over:
                 self.episode_over = True
                 print("Orbit decayed - no penalty, but this one is over.")
+
             else:
                 self.failure = False
-
 
             if self.episode_over:
                 info = {'episode':{
@@ -155,13 +145,13 @@ class leoNadirEnv(gym.Env):
                     'l': self.curr_step},
                     'obs': ob
                 }
-                # self.simulator.close_gracefully() # Stop spice from blowing up
             else:
                 info={
                     'obs': ob
                 }
             reward = self._get_reward()
             self.reward_total += reward
+
         # Otherwise, return nothing
         else:
             ob = []
@@ -178,12 +168,7 @@ class leoNadirEnv(gym.Env):
         :return:
         '''
 
-        # print(self.curr_episode)
-
         self.action_episode_memory[self.curr_episode].append(action)
-
-        #   Let the simulator handle action management:
-        # self.obs, self.debug_states, self.sim_over = self.simulator.run_sim(action, return_obs)
         self.obs, self.sim_over, self.obs_full = self.simulator.run_sim(action, return_obs)
 
     def _get_reward(self):
@@ -191,19 +176,12 @@ class leoNadirEnv(gym.Env):
         Reward is based on time spent with the inertial attitude pointed towards the ground within a given tolerance.
 
         """
-        # If the sim is over, the agent failed, so return the zero reward (might not catch the very last step if we
-        # don't mess up, but whatever for now)
-        # if self.sim_over and ((self.simulator.simTime/60) != self.max_length):
-        #     reward = 0
         if self.failure:
-            reward = 0
-        # If the sim is not over and we did not fail, return reward
+            reward = -self.failure_penalty
         elif self.episode_over:
             reward = (-self.obs_full[14][0])*(self.reward_mult**self.curr_step)+1
         else:
             reward = -self.obs_full[14][0]*(self.reward_mult**self.curr_step)
-            # print("Downlinked: ", self.simulator.obs_full[14][0])
-            # print("Access: ", self.obs_full[15:22])
 
         return reward
 
@@ -221,8 +199,10 @@ class leoNadirEnv(gym.Env):
         self.failure = False
         self.curr_step = 0
         self.reward_total = 0
+
         # Create the simulator
         self.simulator = leoNadirSimulator.LEONadirSimulator(self.dynRate, self.fswRate, self.step_duration)
+
         # Extract initial conditions from instantiation of simulator
         self.initial_conditions = self.simulator.initial_conditions
         self.simulator.max_steps = self.max_steps
@@ -242,10 +222,6 @@ class leoNadirEnv(gym.Env):
         return self.simulator.obs
 
     def reset_init(self, initial_conditions=None):
-        # If the simulate already exists, close it gracefully or you will end up w too many spice objects
-        if self.simulator:
-            print("Closing Spice...")
-            # self.simulator.close_gracefully()
 
         del self.simulator
 
@@ -258,7 +234,6 @@ class leoNadirEnv(gym.Env):
         # If initial conditions are passed in, use those
         if initial_conditions:
             self.initial_conditions = initial_conditions
-        # Otherwise, the initial conditions should have been defined during reset()
 
         self.simulator = leoNadirSimulator.LEONadirSimulator(self.dynRate, self.fswRate, self.step_duration, self.initial_conditions)
         self.simulator.max_steps = self.max_steps
