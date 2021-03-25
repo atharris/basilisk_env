@@ -378,7 +378,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.eclipseObject.addPositionMsgName(self.scObject.scStateOutMsgName)
         self.eclipseObject.addPlanetName('earth')
 
-        #   Disturbance Torque Setup
+        # Disturbance Torque Setup
         disturbance_magnitude = self.initial_conditions.get("disturbance_magnitude")
         disturbance_vector = self.initial_conditions.get("disturbance_vector")
         unit_disturbance = disturbance_vector/np.linalg.norm(disturbance_vector)
@@ -395,7 +395,7 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         self.rwConfigMsgName = "rwConfig"
         unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.rwConfigMsgName, rwFactory.getConfigMessage(), msgStrName="RWArrayConfigFswMsg")
 
-        #   Add thrusters to the spacecraft
+        # Add thrusters to the spacecraft
         self.thrusterSet, thrFactory = ap.idealMonarc1Octet()
         self.thrusterSet.InputCmds = "rwDesatTimeOnCmd"
         thrModelTag = "ACSThrusterDynamics"
@@ -403,12 +403,12 @@ class LEONadirSimulator(SimulationBaseClass.SimBaseClass):
         unitTestSupport.setMessage(self.TotalSim, self.DynamicsProcessName, self.thrusterConfigMsgName, thrFactory.getConfigMessage(), msgStrName="THRArrayConfigFswMsg")
         thrFactory.addToSpacecraft(thrModelTag, self.thrusterSet, self.scObject)
 
-        #   Add simpleNav as a mock estimator to the spacecraft
+        # Add simpleNav as a mock estimator to the spacecraft
         self.simpleNavObject = simple_nav.SimpleNav()
         self.simpleNavObject.ModelTag = 'SimpleNav'
         self.simpleNavObject.inputStateName = self.scObject.scStateOutMsgName
 
-        #   Power setup
+        # Power setup
         self.solarPanel = simpleSolarPanel.SimpleSolarPanel()
         self.solarPanel.ModelTag = 'solarPanel' + str(sc_number)
         self.solarPanel.stateInMsgName = self.scObject.scStateOutMsgName
